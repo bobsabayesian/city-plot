@@ -32,6 +32,8 @@ export interface Landmark {
   notable?: boolean;
   /** user landmarks only */
   icon?: CustomIcon;
+  /** user landmarks only: added automatically for a searched place (and still off), so it can be replaced by the next search */
+  fromSearch?: boolean;
 }
 
 /** A lake or river, for writing its name; lakes are closed rings, [lat, lon] pairs. */

@@ -49,6 +49,22 @@ export function regionFor(hit: Pick<Place, 'lat' | 'lon' | 'bbox'>): Region {
 export const clampKm = (km: number) => Math.min(REGION_MAX_KM, Math.max(REGION_MIN_KM, km));
 
 let placeId = 0;
+
+/**
+ * Offer the searched place as one of "my landmarks", switched off: a school or a street corner is not an OSM
+ * landmark, but you may still want it marked. The previous search's entry goes if it was never switched on.
+ * Mutates (use on a draft).
+ */
+export function offerPlace(p: Project, place: Place): void {
+  p.custom = p.custom.filter((c) => !(c.fromSearch && p.features.overrides[c.id]?.hidden));
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+  if (p.custom.some((c) => c.name === place.name && near(c.lat, place.lat) && near(c.lon, place.lon))) return;
+  let n = 1;
+  while (p.custom.some((c) => c.id === `custom-${n}`)) n++;
+  const id = `custom-${n}`;
+  p.custom.push({ id, name: place.name, kind: 'custom', lat: place.lat, lon: place.lon, icon: 'pin', fromSearch: true });
+  p.features.overrides[id] = { hidden: true };
+}
 let customId = 0;
 
 export const useStore = create<Store>((setState, get) => ({
@@ -80,7 +96,7 @@ export const useStore = create<Store>((setState, get) => ({
     if (!hit) return;
     ++placeId;
     const place: Place = { name: hit.name, lat: hit.lat, lon: hit.lon, kind: hit.kind, location: hit.location || undefined, bbox: hit.bbox };
-    get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = {}; });
+    get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = Object.fromEntries(Object.entries(p.features.overrides).filter(([k]) => k.startsWith('custom-'))); offerPlace(p, place); });
     setState({ searchIndex: i, layers: {}, landmarks: { status: 'idle' } });
   },
 
@@ -91,7 +107,7 @@ export const useStore = create<Store>((setState, get) => ({
       if (at) {
         const id = ++placeId;
         const place: Place = { name: `${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}`, lat: at.lat, lon: at.lon, kind: 'coordinates' };
-        get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = {}; });
+        get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = Object.fromEntries(Object.entries(p.features.overrides).filter(([k]) => k.startsWith('custom-'))); });
         setState({ searchResults: [], layers: {}, landmarks: { status: 'idle' }, busy: '' });
         // the poster still gets a region name, a moment later
         reverseLocation(at.lat, at.lon).then((location) => { if (id === placeId) get().set((p) => { if (p.place) p.place.location = location; }); }).catch(() => {});

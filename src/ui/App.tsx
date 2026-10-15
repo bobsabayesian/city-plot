@@ -350,7 +350,7 @@ export function App() {
         </>)}
 
         <h3>My landmarks</h3>
-        <div className="hint">Mark your own places, like home. Give an address (or a place name) or latitude, longitude.</div>
+        <div className="hint">Mark your own places, like home. Give an address (or a place name) or latitude, longitude. A place you search for is added here, switched off; tick it to mark it on the map.</div>
         <form className="field" onSubmit={async (e) => {
           e.preventDefault();
           if (!custom.where.trim()) return;
@@ -369,7 +369,9 @@ export function App() {
           const placed = composed.landmarks?.some((l) => l.id === c.id && l.placed);
           return (
             <div className="field" key={c.id}>
-              <Row label="Name"><input type="text" value={c.name} onChange={(e) => set((x) => { x.custom[i]!.name = e.target.value; })} />
+              <Row label="Name">
+                <input type="checkbox" title="Show on the map" checked={!p.features.overrides[c.id]?.hidden} onChange={(e) => set((x) => { x.features.overrides[c.id] = { ...x.features.overrides[c.id], hidden: !e.target.checked }; })} />
+                <input type="text" value={c.name} onChange={(e) => set((x) => { x.custom[i]!.name = e.target.value; })} />
                 <button title="Remove" onClick={() => set((x) => { x.custom.splice(i, 1); })}>×</button></Row>
               <Row label="Marker">
                 <select value={c.icon ?? 'pin'} onChange={(e) => set((x) => { x.custom[i]!.icon = e.target.value as CustomIcon; })}>
@@ -377,7 +379,7 @@ export function App() {
                 </select>
                 <button title="Move the map here" onClick={() => setRegion({ lat: c.lat, lon: c.lon })}>Center</button>
               </Row>
-              <div className="hint">{c.lat.toFixed(5)}, {c.lon.toFixed(5)}{region && !placed ? ' · outside the map, or no room for its label' : ''}</div>
+              <div className="hint">{c.lat.toFixed(5)}, {c.lon.toFixed(5)}{p.features.overrides[c.id]?.hidden ? ' · not shown' : region && !placed ? ' · outside the map, or no room for its label' : ''}</div>
             </div>
           );
         })}
