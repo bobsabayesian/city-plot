@@ -1,0 +1,48 @@
+:root { --bg:#f4f4f2; --panel:#fff; --ink:#1c211e; --muted:#6b726d; --line:#dcdedb; --accent:#2f5d46; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#161917; --panel:#1f2321; --ink:#e8ebe8; --muted:#939a95; --line:#323734; --accent:#7fb89a; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 Inter, system-ui, sans-serif; }
+.app { display:grid; grid-template-columns:340px 1fr; height:100vh; }
+.panel { background:var(--panel); border-right:1px solid var(--line); overflow:auto; padding:16px; }
+.panel h1 { font-size:16px; margin:0 0 12px; letter-spacing:.04em; }
+.panel h2 { font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin:20px 0 8px; }
+.row { display:flex; align-items:center; gap:8px; margin:6px 0; }
+.row > label { flex:0 0 84px; color:var(--muted); font-size:12px; }
+.row input[type=text], .row select, .row input[type=number] { flex:1; min-width:0; padding:5px 6px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; font:inherit; }
+.row input[type=range] { flex:1; }
+.row input[type=color] { width:36px; height:26px; padding:0; border:1px solid var(--line); background:none; }
+.drop { border:1.5px dashed var(--line); border-radius:8px; padding:18px; text-align:center; color:var(--muted); cursor:pointer; }
+.drop.over { border-color:var(--accent); color:var(--accent); }
+button { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; cursor:pointer; }
+button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+.stage { display:flex; align-items:center; justify-content:center; padding:24px; overflow:auto; min-width:0; }
+.sheet { box-shadow:0 8px 30px rgba(0,0,0,.18); max-height:100%; max-width:100%; line-height:0; }
+.sheet svg { display:block; max-width:100%; max-height:calc(100vh - 48px); height:auto; width:auto; }
+.field { border:1px solid var(--line); border-radius:6px; padding:6px 8px; margin:6px 0; }
+.err { color:#b3261e; font-size:12px; margin-top:6px; }
+@media (max-width: 760px) { .app { grid-template-columns:1fr; height:auto; } .panel { border-right:0; border-bottom:1px solid var(--line); } }
+.panel h3 { font-size:13px; margin:14px 0 4px; }
+.item { display:grid; grid-template-columns:20px 1fr 1fr 28px; gap:4px; margin:4px 0; align-items:center; }
+.item input[type=text] { min-width:0; padding:4px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; font:inherit; }
+.item button { padding:2px 0; }
+.hint { color:var(--muted); font-size:12px; margin:2px 0 8px; }
+.kinds { display:grid; grid-template-columns:1fr 1fr; gap:2px 8px; margin:6px 0; font-size:12px; }
+.lm { display:grid; grid-template-columns:20px 1fr 70px; gap:4px; margin:4px 0; align-items:center; }
+.lm input[type=text], .lm select { min-width:0; padding:4px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; font:inherit; }
+.results { display:flex; flex-direction:column; gap:4px; margin:8px 0; }
+.res { text-align:left; display:flex; flex-direction:column; padding:6px 8px; }
+.res span { color:var(--muted); font-size:12px; }
+.res.sel { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.found { border-left:3px solid var(--accent); padding:4px 8px; margin:8px 0; }
+.slot { margin:8px 0; }
+.slot select { width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; font:inherit; }
+.lm .hint { grid-column:2 / 4; margin:0; }
+.swatch { flex:0 0 14px; width:14px; height:14px; border-radius:50%; border:1px solid var(--line); }
+.penrow { display:grid; grid-template-columns:34px 1fr 62px auto 28px; gap:4px; align-items:center; }
+.penrow input[type=text], .penrow input[type=number] { min-width:0; padding:4px; border:1px solid var(--line); border-radius:4px; background:transparent; color:inherit; font:inherit; }
+.penrow input[type=color] { width:30px; height:26px; }
+.unit { color:var(--muted); font-size:12px; }
+.overrides { margin:6px 0; }
+.overrides summary { cursor:pointer; color:var(--muted); font-size:12px; }
