@@ -1,4 +1,4 @@
-import { fitBBox, inverseMercator, mercator, type BBox, type Fit } from '../geo/project';
+import { fitBBox, inverseMercator, mercator, rotateFit, type BBox, type Fit } from '../geo/project';
 import type { Rect } from '../geo/clip';
 import { formatCoords, formatKm, formatMiles } from '../geo/format';
 import { layerPrims, waterLines } from '../city/draw';
@@ -7,7 +7,7 @@ import { landmarkPrims } from '../features/draw';
 import type { LandmarkEntry, LandmarkPlacement } from '../features/select';
 import { penKeyOf, type Landmark } from '../features/types';
 import { northPrims } from './north';
-import { borderPrims, layoutBorder } from './border';
+import { borderExtent, borderPrims, layoutBorder } from './border';
 import { featurePenId, penFor } from './pens';
 import type { Prim, Scene } from './types';
 import { clampMargins, posterMm, type InfoItem, type Placement, type Project, type Region } from './project';
@@ -83,12 +83,15 @@ const roundScale = (s: number) => { const q = s >= 2000 ? 100 : 10; return Math.
 function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
   const { w: W, h: H } = posterMm(p);
   const prims: Prim[] = [];
-  const mg = clampMargins(p.page.margins, W, H); // explicit page margins, paper edge to content
+  // The page margin is measured from the inside of the border (from the paper edge when there is none).
+  const reach = borderExtent(p.border);
+  const pm = p.page.margins;
+  const mg = clampMargins({ top: pm.top + reach, right: pm.right + reach, bottom: pm.bottom + reach, left: pm.left + reach }, W, H);
   const minMargin = Math.min(mg.top, mg.right, mg.bottom, mg.left);
   const t = p.text;
   const colorOf = (penId: string) => penFor(p.pens, penId).color;
   // the border goes first so it is drawn under everything else
-  if (!layoutOnly) prims.push(...borderPrims(W, H, p.border, mg, colorOf(p.border.pen)));
+  if (!layoutOnly) prims.push(...borderPrims(W, H, p.border, colorOf(p.border.pen)));
   const fontFamily = FONTS[t.font];
   const anchor = t.align === 'left' ? 'start' : t.align === 'right' ? 'end' : 'middle';
   const contentL = mg.left;
@@ -204,8 +207,14 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
   let open: LandmarkPlacement['open'] | undefined;
   if (p.region) {
     const frame: Rect = { x: contentL, y: topCursor, w: innerW, h: Math.max(bottomCursor - topCursor, 1) };
-    const bboxView = regionBBox(p.region, frame.h / frame.w);
-    const fit = fitBBox(bboxView, frame);
+    const flat = fitBBox(regionBBox(p.region, frame.h / frame.w), frame);
+    const fit = rotateFit(flat, frame, p.region.rotationDeg ?? 0);
+    // the ground the frame shows; turned, that is a tilted rectangle, so data is needed for its bounding box
+    const corners = [[frame.x, frame.y], [frame.x + frame.w, frame.y], [frame.x, frame.y + frame.h], [frame.x + frame.w, frame.y + frame.h]].map(([x, y]) => fit.fromMm(x!, y!));
+    const bboxView: BBox = {
+      minLat: Math.min(...corners.map((c) => c[0])), maxLat: Math.max(...corners.map((c) => c[0])),
+      minLon: Math.min(...corners.map((c) => c[1])), maxLon: Math.max(...corners.map((c) => c[1])),
+    };
     const groundPerMm = fit.metersPerMm * Math.cos((p.region.lat * Math.PI) / 180);
     view = {
       frame, fit, bbox: bboxView,
@@ -220,7 +229,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     const { frame, fit } = view;
     const widest = Math.max(view.widthKm, view.heightKm);
     // Landmark labels may spill a little into the margin, but never onto or past the border.
-    const innerBorder = p.border.enabled ? layoutBorder(W, H, p.border, mg).rects.at(-1)!.x + p.border.weightMm / 2 + 1.5 : 0;
+    const innerBorder = p.border.enabled ? layoutBorder(W, H, p.border).rects.at(-1)!.x + p.border.weightMm / 2 + 1.5 : 0;
     const withinBorder = (r: Rect): Rect => {
       const x0 = Math.max(r.x, innerBorder);
       const y0 = Math.max(r.y, innerBorder);
@@ -236,7 +245,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     }
 
     if (p.north.enabled) {
-      prims.push(...northPrims(frame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font }));
+      prims.push(...northPrims(frame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }));
     }
 
     if (p.features.enabled) {

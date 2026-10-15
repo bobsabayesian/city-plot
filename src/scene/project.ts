@@ -94,6 +94,8 @@ export interface Region {
   lat: number;
   lon: number;
   widthKm: number;
+  /** degrees the map is turned clockwise from north-up (-180 to 180); the north arrow follows */
+  rotationDeg?: number;
 }
 
 /** Narrowest and widest region the controls offer. */

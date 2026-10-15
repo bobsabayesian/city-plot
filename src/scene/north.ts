@@ -1,5 +1,6 @@
 import type { Rect } from '../geo/clip';
 import type { Prim } from './types';
+import { flattenPath } from '../export/offset';
 import type { Corner, NorthStyle } from './project';
 
 export interface NorthOpts {
@@ -12,6 +13,8 @@ export interface NorthOpts {
   weightMm: number;
   fontFamily: string;
   fontKey: 'sans' | 'serif';
+  /** the map's heading: degrees clockwise the map is turned, so the arrow points this far right of up */
+  rotateDeg?: number;
 }
 
 const f = (n: number) => +n.toFixed(2);
@@ -36,6 +39,14 @@ export function northBox(frame: Rect, corner: Corner, s: number): { x: number; y
  * Outlines are strokes and only the north point is filled, so plotter mode (strokes only) keeps it legible.
  */
 export function northPrims(frame: Rect, o: NorthOpts): Prim[] {
+  const prims = northUp(frame, o);
+  if (!o.rotateDeg) return prims;
+  const { x, y } = northBox(frame, o.corner, o.sizeMm);
+  return turnPrims(prims, x + o.sizeMm / 2, y + o.sizeMm / 2, o.rotateDeg);
+}
+
+/** The indicator pointing straight up. */
+function northUp(frame: Rect, o: NorthOpts): Prim[] {
   const s = o.sizeMm;
   const { x: x0, y: y0 } = northBox(frame, o.corner, s);
   const cx = x0 + s / 2;
@@ -102,4 +113,24 @@ export function northPrims(frame: Rect, o: NorthOpts): Prim[] {
     }
   }
   return prims;
+}
+
+/**
+ * Turn drawn shapes clockwise about (cx, cy). Lines are flattened first (arcs included). Letters keep their
+ * upright orientation so they stay readable; only their positions move.
+ */
+export function turnPrims(prims: Prim[], cx: number, cy: number, deg: number): Prim[] {
+  const a = (deg * Math.PI) / 180;
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  const at = (x: number, y: number): [number, number] => [cx + (x - cx) * c - (y - cy) * s, cy + (x - cx) * s + (y - cy) * c];
+  return prims.map((p) => {
+    if (p.kind === 'text') {
+      const [x, y] = at(p.x, p.y);
+      return { ...p, x: +x.toFixed(2), y: +y.toFixed(2) };
+    }
+    const d = flattenPath(p.d)
+      .map((sub) => sub.pts.map(([x, y], i) => { const [rx, ry] = at(x, y); return `${i ? 'L' : 'M'}${f(rx)} ${f(ry)}`; }).join('') + (sub.closed ? 'Z' : ''))
+      .join('');
+    return { ...p, d };
+  });
 }

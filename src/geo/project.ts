@@ -68,3 +68,22 @@ export function fitBBox(b: BBox, frame: { x: number; y: number; w: number; h: nu
     fromMm: (x, y) => inverseMercator(x0 + (x - offX) / scale, y1 - (y - offY) / scale),
   };
 }
+
+/**
+ * The same fit turned clockwise by `deg` about the center of `frame`, so the map reads at a heading other than
+ * north-up. Everything drawn from this fit (and clipped to the frame) follows.
+ */
+export function rotateFit(fit: Fit, frame: { x: number; y: number; w: number; h: number }, deg: number): Fit {
+  if (!deg) return fit;
+  const a = (deg * Math.PI) / 180;
+  const [c, s] = [Math.cos(a), Math.sin(a)];
+  const cx = frame.x + frame.w / 2;
+  const cy = frame.y + frame.h / 2;
+  const turn = ([x, y]: [number, number], k: number): [number, number] => [cx + (x - cx) * c - k * (y - cy) * s, cy + k * (x - cx) * s + (y - cy) * c];
+  return {
+    metersPerMm: fit.metersPerMm,
+    toMm: (la, lo) => turn(fit.toMm(la, lo), 1),
+    mercToMm: (mx, my) => turn(fit.mercToMm(mx, my), 1),
+    fromMm: (x, y) => { const [ux, uy] = turn([x, y], -1); return fit.fromMm(ux, uy); },
+  };
+}

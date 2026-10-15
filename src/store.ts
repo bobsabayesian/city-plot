@@ -72,6 +72,7 @@ export const useStore = create<Store>((setState, get) => ({
     Object.assign(p.region, r);
     p.region.widthKm = clampKm(p.region.widthKm);
     p.region.lat = Math.max(-80, Math.min(80, p.region.lat));
+    if (p.region.rotationDeg !== undefined) p.region.rotationDeg = ((((p.region.rotationDeg + 180) % 360) + 360) % 360) - 180;
   }),
 
   choosePlace: (i) => {

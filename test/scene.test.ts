@@ -148,3 +148,85 @@ describe('png sizing', () => {
     expect(s.width / s.height).toBeCloseTo(2 / 3, 2);
   });
 });
+
+describe('rotating the map', () => {
+  const turned = (deg: number) => cityProject((p) => { p.region!.rotationDeg = deg; });
+  const centerOf = (p: ReturnType<typeof cityProject>) => { const v = viewOf(p)!; return v.fit.toMm(p.region!.lat, p.region!.lon).map((x) => +x.toFixed(3)); };
+
+  it('turns about the middle of the frame: the region center stays put', () => {
+    const v = viewOf(turned(0))!;
+    const mid = [v.frame.x + v.frame.w / 2, v.frame.y + v.frame.h / 2].map((x) => +x.toFixed(3));
+    for (const deg of [0, 30, 90, -45, 180]) expect(centerOf(turned(deg))).toEqual(mid);
+  });
+  it('a quarter turn clockwise puts north on the right: a point north of center lands right of it', () => {
+    const p = turned(90);
+    const v = viewOf(p)!;
+    const [cx, cy] = v.fit.toMm(p.region!.lat, p.region!.lon);
+    const [nx, ny] = v.fit.toMm(p.region!.lat + 0.005, p.region!.lon);
+    expect(nx).toBeGreaterThan(cx + 1);
+    expect(ny).toBeCloseTo(cy, 3);
+    const [ex, ey] = v.fit.toMm(p.region!.lat, p.region!.lon + 0.005); // and east lands below
+    expect(ey).toBeGreaterThan(cy + 1);
+    expect(ex).toBeCloseTo(cx, 3);
+  });
+  it('fromMm undoes toMm when turned', () => {
+    const v = viewOf(turned(37))!;
+    const [x, y] = v.fit.toMm(47.61, -122.33);
+    const [la, lo] = v.fit.fromMm(x, y);
+    expect(la).toBeCloseTo(47.61, 6);
+    expect(lo).toBeCloseTo(-122.33, 6);
+  });
+  it('the data needed is the box around the tilted view, so it grows with the turn and covers the frame corners', () => {
+    const flat = viewOf(turned(0))!.bbox;
+    const diag = viewOf(turned(45))!.bbox;
+    expect(diag.maxLat - diag.minLat).toBeGreaterThan(flat.maxLat - flat.minLat);
+    expect(diag.maxLon - diag.minLon).toBeGreaterThan(flat.maxLon - flat.minLon);
+    const v = viewOf(turned(45))!;
+    for (const [x, y] of [[v.frame.x, v.frame.y], [v.frame.x + v.frame.w, v.frame.y + v.frame.h]] as [number, number][]) {
+      const [la, lo] = v.fit.fromMm(x, y);
+      expect(la).toBeGreaterThanOrEqual(diag.minLat - 1e-9);
+      expect(la).toBeLessThanOrEqual(diag.maxLat + 1e-9);
+      expect(lo).toBeGreaterThanOrEqual(diag.minLon - 1e-9);
+      expect(lo).toBeLessThanOrEqual(diag.maxLon + 1e-9);
+    }
+  });
+  it('the ground size and scale do not change when the map is turned', () => {
+    const [a, b] = [viewOf(turned(0))!, viewOf(turned(60))!];
+    expect(b.widthKm).toBeCloseTo(a.widthKm, 6);
+    expect(b.scale).toBe(a.scale);
+  });
+  it('map lines are still clipped to the frame', () => {
+    const p = turned(30);
+    const f = viewOf(p)!.frame;
+    let checked = 0;
+    for (const x of composeScene(p, cityData()).scene.prims) {
+      if (x.kind !== 'path' || x.mode !== 'stroke' || x.d.includes('a')) continue; // map lines only: markers use relative arcs
+      const n = (x.d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+      for (let i = 0; i + 1 < n.length; i += 2) {
+        if (n[i]! < f.x - 0.01 || n[i]! > f.x + f.w + 0.01 || n[i + 1]! < f.y - 0.01 || n[i + 1]! > f.y + f.h + 0.01) throw new Error(`${x.d.slice(0, 40)} -> ${n[i]},${n[i + 1]}`);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(20);
+  });
+  it('the north arrow turns with the map, and letters stay upright', () => {
+    const north = (deg: number) => {
+      const p = cityProject((q) => { q.north.enabled = true; q.north.style = 'compass'; q.region!.rotationDeg = deg; });
+      return composeScene(p).scene.prims;
+    };
+    const label = (ps: ReturnType<typeof north>, t: string) => ps.find((x) => x.kind === 'text' && x.text === t) as { x: number; y: number; rotate?: number };
+    const [up, right] = [north(0), north(90)];
+    expect(label(up, 'N').rotate).toBeUndefined();
+    expect(label(right, 'N').rotate).toBeUndefined(); // upright
+    const [n0, n1, s1] = [label(up, 'N'), label(right, 'N'), label(right, 'S')];
+    const cx = (label(up, 'E').x + label(up, 'W').x) / 2;
+    expect(n0.x).toBeCloseTo(cx, 1); // straight up
+    expect(n1.x).toBeGreaterThan(cx + 3); // a quarter turn clockwise: N is on the right
+    expect(s1.x).toBeLessThan(cx - 3);
+  });
+  it('north stays up when the map is not turned: no rotation key is needed', () => {
+    const p = cityProject((q) => { q.north.enabled = true; });
+    expect(p.region!.rotationDeg).toBeUndefined();
+    expect(() => buildScene(p)).not.toThrow();
+  });
+});

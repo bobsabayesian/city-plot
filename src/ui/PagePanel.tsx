@@ -1,5 +1,5 @@
 import { clampMargins, posterMm, type Margins, type Project } from '../scene/project';
-import { layoutBorder } from '../scene/border';
+import { borderExtent } from '../scene/border';
 import { PenSelect } from './PensPanel';
 import { useStore } from '../store';
 
@@ -15,10 +15,12 @@ export const marginFromUnits = (v: number, units: Project['units']) => Math.max(
 export function PagePanel({ project: p }: { project: Project }) {
   const set = useStore((s) => s.set);
   const { w, h } = posterMm(p);
-  const used = clampMargins(p.page.margins, w, h);
+  const reach = borderExtent(p.border);
+  const m = p.page.margins;
+  const used = clampMargins({ top: m.top + reach, right: m.right + reach, bottom: m.bottom + reach, left: m.left + reach }, w, h);
   const unit = p.units === 'imperial' ? 'in' : 'mm';
   const step = p.units === 'imperial' ? 0.05 : 1;
-  const clamped = SIDES.some(({ key }) => Math.abs(used[key] - p.page.margins[key]) > 0.01);
+  const clamped = SIDES.some(({ key }) => Math.abs(used[key] - p.page.margins[key] - reach) > 0.01);
 
   const setSide = (key: keyof Margins, v: number) =>
     set((x) => {
@@ -29,7 +31,7 @@ export function PagePanel({ project: p }: { project: Project }) {
 
   return (
     <>
-      <h2>Page margins</h2>
+      <h2>Page margin</h2>
       <div className="row">
         <label><input type="checkbox" checked={p.page.linked} onChange={(e) => set((x) => {
           x.page.linked = e.target.checked;
@@ -44,15 +46,14 @@ export function PagePanel({ project: p }: { project: Project }) {
         </div>
       ))}
       <div className="hint">
-        Distance from the paper edge to the map and text. Margins stay the same when you change the poster size.
+        {p.border.enabled ? 'Space between the inside of the border and the map and text. ' : 'Distance from the paper edge to the map and text. '}Margins stay the same when you change the poster size.
         {clamped ? ' Reduced to leave room for the content (at least 20% of the page each way).' : ''}
       </div>
-      <h2>Border</h2>
+      <h2>Border margin</h2>
       <div className="row">
         <label><input type="checkbox" checked={p.border.enabled} onChange={(e) => set((x) => { x.border.enabled = e.target.checked; })} /> Draw a border</label>
       </div>
       {p.border.enabled && (() => {
-        const lay = layoutBorder(w, h, p.border, used);
         return (<>
           <div className="row">
             <label>Style</label>
@@ -61,7 +62,7 @@ export function PagePanel({ project: p }: { project: Project }) {
             </select>
           </div>
           <div className="row">
-            <label>From edge</label>
+            <label>Border margin</label>
             <input type="number" min={0} step={step} value={marginToUnits(p.border.offsetMm, p.units)} onChange={(e) => set((x) => { x.border.offsetMm = marginFromUnits(+e.target.value, x.units); })} />
             <span className="unit">{unit}</span>
           </div>
@@ -78,7 +79,7 @@ export function PagePanel({ project: p }: { project: Project }) {
             <span className="unit">mm</span>
           </div>
           <div className="row"><label>Pen</label><PenSelect pens={p.pens} value={p.border.pen} onChange={(id) => set((x) => { x.border.pen = id!; })} /></div>
-          {lay.clamped && <div className="err">Pulled in to fit inside the smallest margin: now {marginToUnits(lay.offsetMm, p.units)} {unit} from the edge{p.border.style === 'double' ? `, ${marginToUnits(lay.gapMm, p.units)} ${unit} apart` : ''}. Widen the margins for more room.</div>}
+          <div className="hint">Distance from the paper edge to the border. The page margin is measured from inside it.</div>
         </>);
       })()}
     </>

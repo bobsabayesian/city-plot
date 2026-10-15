@@ -135,14 +135,17 @@ export function App() {
       }
       useStore.getState().setRegion({ lat, lon, widthKm });
     };
-    let drag: { x: number; y: number; lat: number; lon: number; k: number; merc: number } | undefined;
+    let drag: { x: number; y: number; lat: number; lon: number; k: number; merc: number; rot: number; spin?: { angle: number; from: number } } | undefined;
     let raf = 0;
     const onDown = (e: PointerEvent) => {
       const m = toMm(e);
       const region = live.current.region;
       if (!m || !region || !inFrame(m)) return;
       el.setPointerCapture(e.pointerId);
-      drag = { x: e.clientX, y: e.clientY, lat: region.lat, lon: region.lon, k: m.k, merc: m.v.fit.metersPerMm };
+      const rot = region.rotationDeg ?? 0;
+      // shift-drag turns the map about the frame's center instead of moving it
+      const angleAt = (mm: { x: number; y: number }) => (Math.atan2(mm.y - (m.v.frame.y + m.v.frame.h / 2), mm.x - (m.v.frame.x + m.v.frame.w / 2)) * 180) / Math.PI;
+      drag = { x: e.clientX, y: e.clientY, lat: region.lat, lon: region.lon, k: m.k, merc: m.v.fit.metersPerMm, rot, ...(e.shiftKey ? { spin: { angle: angleAt(m), from: rot } } : {}) };
       el.classList.add('dragging');
     };
     const onMove = (e: PointerEvent) => {
@@ -150,9 +153,21 @@ export function App() {
       const d = drag;
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        // the map follows the pointer: dragging right moves the center left
+        if (d.spin) {
+          const m = toMm(e);
+          if (!m) return;
+          const now = (Math.atan2(m.y - (m.v.frame.y + m.v.frame.h / 2), m.x - (m.v.frame.x + m.v.frame.w / 2)) * 180) / Math.PI;
+          let deg = d.spin.from + (now - d.spin.angle);
+          deg = ((((deg + 180) % 360) + 360) % 360) - 180;
+          useStore.getState().setRegion({ rotationDeg: Math.round(deg) });
+          return;
+        }
+        // the map follows the pointer: dragging right moves the center left. On a turned map the drag is turned back first.
+        const a = (-d.rot * Math.PI) / 180;
+        const [dx, dy] = [(e.clientX - d.x) * d.k, (e.clientY - d.y) * d.k];
+        const [ux, uy] = [dx * Math.cos(a) - dy * Math.sin(a), dx * Math.sin(a) + dy * Math.cos(a)];
         const [cx, cy] = mercator(d.lat, d.lon);
-        const [lat, lon] = inverseMercator(cx - (e.clientX - d.x) * d.k * d.merc, cy + (e.clientY - d.y) * d.k * d.merc);
+        const [lat, lon] = inverseMercator(cx - ux * d.merc, cy + uy * d.merc);
         useStore.getState().setRegion({ lat, lon });
       });
     };
@@ -216,6 +231,12 @@ export function App() {
             <input type="number" step={0.001} title="Latitude" value={+region.lat.toFixed(5)} onChange={(e) => setRegion({ lat: +e.target.value || 0 })} />
             <input type="number" step={0.001} title="Longitude" value={+region.lon.toFixed(5)} onChange={(e) => setRegion({ lon: +e.target.value || 0 })} />
           </Row>
+          <Row label="Rotate">
+            <input type="range" min={-180} max={180} step={1} value={region.rotationDeg ?? 0} onChange={(e) => setRegion({ rotationDeg: +e.target.value })} />
+            <input type="number" min={-180} max={180} step={1} style={{ maxWidth: 64 }} value={Math.round(region.rotationDeg ?? 0)} onChange={(e) => setRegion({ rotationDeg: +e.target.value || 0 })} />
+            <button disabled={!region.rotationDeg} title="North up" onClick={() => setRegion({ rotationDeg: 0 })}>↑</button>
+          </Row>
+          <div className="hint">Turns the map clockwise; the north arrow turns with it. Shift-drag the map to rotate it.</div>
           <div className="hint">Covers {fmtKm(view.widthKm)} × {fmtKm(view.heightKm)} · scale 1:{view.scale.toLocaleString('en-US')}</div>
           {p.place && <div className="row"><button onClick={() => { const pl = p.place!; setRegion({ lat: pl.lat, lon: pl.lon }); }}>Center on {p.place.name}</button></div>}
         </>)}

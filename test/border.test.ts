@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BORDER_CLEARANCE_MM, borderPrims, defaultBorder, layoutBorder, type BorderSettings } from '../src/scene/border';
+import { borderExtent, borderPrims, defaultBorder, layoutBorder, type BorderSettings } from '../src/scene/border';
 import { defaultProject, posterMm, type Project } from '../src/scene/project';
 import { buildScene, composeScene, viewOf } from '../src/scene/buildScene';
 import { prepareScene, type FontSet } from '../src/export/outlines';
@@ -26,52 +26,60 @@ const borders = (p: Project) => buildScene(p).prims.filter((x): x is PathPrim =>
 describe('border layout', () => {
   it('is off by default and draws nothing', () => {
     expect(defaultProject().border.enabled).toBe(false);
-    expect(borderPrims(W, H, defaultBorder('black'), margins, '#000')).toEqual([]);
+    expect(borderPrims(W, H, defaultBorder('black'), '#000')).toEqual([]);
     expect(borders(base())).toHaveLength(0);
+    expect(borderExtent(defaultBorder('black'))).toBe(0);
   });
-  it('a single border is one rectangle inset from the paper edge', () => {
-    const l = layoutBorder(W, H, on({ offsetMm: 12 }), margins);
-    expect(l.rects).toEqual([{ x: 12, y: 12, w: W - 24, h: H - 24 }]);
-    expect(l.clamped).toBe(false);
+  it('a single border is one rectangle inset from the paper edge by the border margin', () => {
+    expect(layoutBorder(W, H, on({ offsetMm: 12 })).rects).toEqual([{ x: 12, y: 12, w: W - 24, h: H - 24 }]);
   });
   it('a double border is two rectangles, the inner one the gap further in', () => {
-    const l = layoutBorder(W, H, on({ style: 'double', offsetMm: 10, gapMm: 3 }), margins);
+    const l = layoutBorder(W, H, on({ style: 'double', offsetMm: 10, gapMm: 3 }));
     expect(l.rects).toEqual([{ x: 10, y: 10, w: W - 20, h: H - 20 }, { x: 13, y: 13, w: W - 26, h: H - 26 }]);
   });
-  it('the offset and gap are respected exactly when there is room', () => {
-    const l = layoutBorder(W, H, on({ style: 'double', offsetMm: 8, gapMm: 4 }), { top: 40, right: 40, bottom: 40, left: 40 });
-    expect(l.offsetMm).toBe(8);
-    expect(l.gapMm).toBe(4);
-  });
-  it('stays inside the smallest margin: a too-large offset is pulled in', () => {
-    const l = layoutBorder(W, H, on({ offsetMm: 80 }), { top: 40, right: 25, bottom: 40, left: 40 });
-    expect(l.clamped).toBe(true);
-    expect(l.offsetMm + 0.25).toBeLessThanOrEqual(25 - BORDER_CLEARANCE_MM + 1e-9); // outer edge of the line is clear of the content
-  });
-  it('for a double border the whole thing fits, shrinking the offset first and then the gap', () => {
-    const m = { top: 20, right: 20, bottom: 20, left: 20 };
-    const l = layoutBorder(W, H, on({ style: 'double', offsetMm: 30, gapMm: 5, weightMm: 0.5 }), m);
-    expect(l.clamped).toBe(true);
-    expect(l.offsetMm + l.gapMm + 0.25).toBeLessThanOrEqual(20 - BORDER_CLEARANCE_MM + 1e-9);
-    expect(l.gapMm).toBeCloseTo(5, 6); // there was room for the gap once the offset came in
-    const tight = layoutBorder(W, H, on({ style: 'double', offsetMm: 30, gapMm: 20, weightMm: 0.5 }), m);
-    expect(tight.offsetMm + tight.gapMm + 0.25).toBeLessThanOrEqual(20 - BORDER_CLEARANCE_MM + 1e-9);
-    expect(tight.gapMm).toBeLessThan(20);
-    expect(tight.offsetMm).toBeGreaterThanOrEqual(0.25); // never pushed off the paper
-  });
   it('never goes negative or off the paper, even with no margin at all', () => {
-    const l = layoutBorder(W, H, on({ offsetMm: -5, weightMm: 1 }), { top: 0, right: 0, bottom: 0, left: 0 });
+    const l = layoutBorder(W, H, on({ offsetMm: -5, weightMm: 1 }));
     for (const r of l.rects) {
       expect(r.x).toBeGreaterThanOrEqual(0.5 - 1e-9);
       expect(r.w).toBeLessThanOrEqual(W);
     }
   });
-  it('the smallest margin is the one that limits it', () => {
-    const wide = layoutBorder(W, H, on({ offsetMm: 40 }), { top: 80, right: 80, bottom: 80, left: 80 });
-    const narrow = layoutBorder(W, H, on({ offsetMm: 40 }), { top: 80, right: 80, bottom: 80, left: 14 });
-    expect(wide.clamped).toBe(false);
-    expect(narrow.clamped).toBe(true);
-    expect(narrow.offsetMm).toBeLessThan(14);
+  it('its reach is the margin, plus the gap for a double border, plus half the line', () => {
+    expect(borderExtent(on({ offsetMm: 12, weightMm: 0.5 }))).toBeCloseTo(12.25, 9);
+    expect(borderExtent(on({ style: 'double', offsetMm: 10, gapMm: 3, weightMm: 0.5 }))).toBeCloseTo(13.25, 9);
+  });
+});
+
+describe('border margin and page margin are separate', () => {
+  const frame = (edit: (q: Project) => void) => composeScene(base(edit)).view!.frame;
+  it('the page margin is measured from the paper edge when there is no border', () => {
+    const f = frame((q) => { Object.assign(q.page.margins, { top: 20, right: 20, bottom: 20, left: 20 }); });
+    expect(f.x).toBeCloseTo(20, 6);
+  });
+  it('with a border, the page margin starts inside it: content sits border margin + page margin from the edge', () => {
+    const f = frame((q) => { Object.assign(q.page.margins, { top: 20, right: 20, bottom: 20, left: 20 }); q.border = on({ offsetMm: 12, weightMm: 0.5 }); });
+    expect(f.x).toBeCloseTo(20 + 12.25, 6);
+  });
+  it('changing the border margin moves the border and the content together, keeping the page margin', () => {
+    const at = (off: number) => {
+      const p = base((q) => { Object.assign(q.page.margins, { top: 20, right: 20, bottom: 20, left: 20 }); q.border = on({ offsetMm: off }); });
+      const b = +borders(p)[0]!.d.match(/^M([\d.]+)/)![1]!;
+      return { border: b, content: composeScene(p).view!.frame.x };
+    };
+    const [a, c] = [at(10), at(20)];
+    expect(c.border - a.border).toBeCloseTo(10, 6);
+    expect(c.content - a.content).toBeCloseTo(10, 6);
+    expect(a.content - a.border).toBeCloseTo(c.content - c.border, 6);
+  });
+  it('a double border pushes the content in by its gap too', () => {
+    const single = frame((q) => { q.border = on({ offsetMm: 12 }); });
+    const double = frame((q) => { q.border = on({ offsetMm: 12, style: 'double', gapMm: 3 }); });
+    expect(double.x - single.x).toBeCloseTo(3, 6);
+  });
+  it('the content never collapses, however big the margins', () => {
+    const f = frame((q) => { Object.assign(q.page.margins, { top: 500, right: 500, bottom: 500, left: 500 }); q.border = on({ offsetMm: 200 }); });
+    expect(f.w).toBeGreaterThan(0);
+    expect(f.h).toBeGreaterThan(0);
   });
 });
 
@@ -93,21 +101,9 @@ describe('the border in the poster', () => {
     expect(prims[0]).toMatchObject({ kind: 'path', pen: 'black', widthMm: 0.5, mode: 'stroke' });
     expect((prims[0] as PathPrim).d).toMatch(/^M12 12H[\d.]+V[\d.]+H12Z$/);
   });
-  it('does not change the layout of the map or text', () => {
-    const off = composeScene(base()).view!.frame;
-    const single = composeScene(base((q) => { q.border = on(); })).view!.frame;
-    const double = composeScene(base((q) => { q.border = on({ style: 'double' }); })).view!.frame;
-    expect(single).toEqual(off);
-    expect(double).toEqual(off);
-  });
   it('follows its pen: recoloring the pen recolors the border', () => {
     const p = base((q) => { q.border = on({ pen: 'blue' }); q.pens.find((x) => x.id === 'blue')!.color = '#112233'; });
     expect(borders(p)[0]!.color).toBe('#112233');
-  });
-  it('stays inside the margin when the margin shrinks', () => {
-    const p = base((q) => { q.border = on({ offsetMm: 30 }); Object.assign(q.page.margins, { top: 10, right: 10, bottom: 10, left: 10 }); });
-    const x = +borders(p)[0]!.d.match(/^M([\d.]+)/)![1]!;
-    expect(x + 0.25).toBeLessThan(10);
   });
   it('is listed among the pen users only when on', () => {
     expect(penUsage(base()).some((u) => u.section === 'Border')).toBe(false);
@@ -129,15 +125,15 @@ describe('labels stay inside the border', () => {
   };
   it('a label that would run past the border is moved to the other side of its marker', () => {
     const none = summit(() => {});
-    const framed = summit((q) => { q.border = on({ offsetMm: 28 }); });
+    const framed = summit((q) => { Object.assign(q.page.margins, { top: 6, right: 6, bottom: 6, left: 6 }); q.border = on({ offsetMm: 28 }); }); // content edge about where it was
     expect(none.label?.anchor).toBe('start'); // fits in the margin when there is no border
     expect(framed.label).toBeDefined();
     expect(framed.label!.anchor).not.toBe('start'); // would have crossed the border
   });
   it('no label is written past the inner border line', () => {
-    const { p } = summit((q) => { q.border = on({ offsetMm: 28, style: 'double', gapMm: 2 }); });
+    const { p } = summit((q) => { Object.assign(q.page.margins, { top: 4, right: 4, bottom: 4, left: 4 }); q.border = on({ offsetMm: 28, style: 'double', gapMm: 2 }); });
     const { w } = posterMm(p);
-    const inner = layoutBorder(w, posterMm(p).h, p.border, p.page.margins).rects.at(-1)!.x + p.border.weightMm / 2 + 1.5;
+    const inner = layoutBorder(w, posterMm(p).h, p.border).rects.at(-1)!.x + p.border.weightMm / 2 + 1.5;
     for (const t of buildScene(p).prims) {
       if (t.kind !== 'text' || t.text.startsWith('Generated') || t.text === t.text.toUpperCase()) continue;
       const width = t.text.length * t.sizeMm * 0.56;
