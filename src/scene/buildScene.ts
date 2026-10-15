@@ -15,7 +15,7 @@ import { clampMargins, posterMm, type InfoItem, type Placement, type Project, ty
 const PT = 25.4 / 72;
 /** Poster title when nothing has been searched for yet. */
 export const DEFAULT_TITLE = 'City Plot';
-export const WATERMARK_TEXT = 'Map data © OpenStreetMap contributors · generated with City Plot';
+export const WATERMARK_TEXT = 'Map data © OpenStreetMap contributors · generated with city.bobsabayesian.io';
 export const FONTS = {
   sans: 'Inter, "Helvetica Neue", Helvetica, Arial, sans-serif',
   serif: '"Source Serif 4", Georgia, "Times New Roman", serif',

@@ -216,7 +216,7 @@ describe('title styles in the exports', () => {
     expect(count(0.78)).toBe(3 * count(0.3));
   });
   it('plotter: a plain filled title is still just its outline (no hatching unless asked)', () => {
-    const { out } = run(() => {}, 'plotter');
+    const { out } = run((q) => { q.showWatermark = false; }, 'plotter');
     expect(paths(out).some((x) => x.d.length > 1500 && x.d.includes('Z') && x.widthMm === 0.3)).toBe(true);
     expect(paths(out).filter((x) => (x.d.match(/M/g) ?? []).length > 100)).toHaveLength(0);
   });

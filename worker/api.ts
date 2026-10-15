@@ -2,7 +2,7 @@
 import { LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_MAX_KM, SNAP_DEG, type LayerKey, type Way } from '../src/city/types';
 import type { Landmark, LandmarkKind } from '../src/features/types';
 
-const UA = 'city-plot/0.1 (pen plotter map posters)';
+const UA = 'city-plot/0.1 (https://city.bobsabayesian.io)';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 /**
  * Tried in order. The main server sometimes refuses requests from Cloudflare's network (HTTP 521), so the
