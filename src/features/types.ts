@@ -61,6 +61,12 @@ export interface FeatureOverride {
   /** the user chose this one from the list, even if its kind is switched off */
   pinned?: boolean;
   side?: Side;
+  /** label text size, pt; undefined = the landmarks' size */
+  sizePt?: number;
+  /** draw the marker without its name */
+  noLabel?: boolean;
+  /** write the name without a marker (centered on the spot) */
+  noMarker?: boolean;
 }
 
 export interface FeatureSettings {

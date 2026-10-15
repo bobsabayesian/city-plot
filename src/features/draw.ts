@@ -68,10 +68,12 @@ export function landmarkPrims(inp: LandmarkDraw): { prims: Prim[] } & Pick<Landm
   for (const { pen, ds } of byPen.values())
     prims.push({ kind: 'path', mode: 'stroke', color: pen.color, pen: pen.id, widthMm: pen.tipMm, round: true, d: ds.join('') });
   for (const l of labels) {
+    if (!l.text) continue; // a marker with no name
     const pen = inp.penFor(l.kind);
+    const size = l.sizeMm ?? inp.sizeMm;
     prims.push({
-      kind: 'text', text: l.text, x: l.x, y: l.y, anchor: l.anchor, sizeMm: inp.sizeMm,
-      trackingMm: inp.trackingMm, fontFamily: inp.fontFamily, fontKey: inp.fontKey, color: pen.color, pen: pen.id,
+      kind: 'text', text: l.text, x: l.x, y: l.y, anchor: l.anchor, sizeMm: size,
+      trackingMm: inp.trackingMm * (size / inp.sizeMm), fontFamily: inp.fontFamily, fontKey: inp.fontKey, color: pen.color, pen: pen.id,
       ...(l.rotate ? { rotate: l.rotate } : {}),
     });
   }

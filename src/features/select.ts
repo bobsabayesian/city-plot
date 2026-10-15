@@ -26,6 +26,8 @@ export interface PlacedLabel {
   anchor: 'start' | 'middle' | 'end';
   /** degrees clockwise about (x, y); set for river names that follow their river */
   rotate?: number;
+  /** text size when it differs from the rest, mm */
+  sizeMm?: number;
 }
 
 export interface PlaceInput {
@@ -331,7 +333,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
 
   // Markers of the candidates most likely to be drawn are reserved up front, so a label placed early
   // can't end up on top of a marker that is placed later.
-  const likely = unique.filter((c) => c.marker && !s.overrides[c.id]?.hidden && (c.enabled || s.overrides[c.id]?.pinned));
+  const likely = unique.filter((c) => c.marker && !s.overrides[c.id]?.noMarker && !s.overrides[c.id]?.hidden && (c.enabled || s.overrides[c.id]?.pinned));
   const taken: Box[] = likely
     .slice(0, s.maxLabels + 4)
     .map((c) => boxAt(c.x - markerR, c.y - markerR, c.x + markerR, c.y + markerR));
@@ -350,12 +352,15 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
 
   /** Find a spot for `c` and record the label. Returns whether it fit. */
   const place = (c: Candidate, name: string, ov: NonNullable<PlaceInput['settings']['overrides'][string]>): boolean => {
-    const w = name.length * sizeMm * CHAR_W;
+    // per-landmark formatting: its own text size, with or without the marker, with or without the name
+    const sz = ov.sizePt && ov.sizePt > 0 ? ov.sizePt * (25.4 / 72) : sizeMm;
+    const hasMarker = c.marker && !ov.noMarker;
+    const w = name.length * sz * CHAR_W;
 
     if (c.kind === 'river') {
       // Write the name along the river, just above it; try below, then other stretches, if taken.
-      const h = sizeMm * 0.95;
-      const lineGap = sizeMm * 0.25;
+      const h = sz * 0.95;
+      const lineGap = sz * 0.25;
       for (const st of c.alts ?? []) {
         const nx = Math.sin(st.angle);
         const ny = -Math.cos(st.angle);
@@ -364,7 +369,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
           const center: XY = [st.x + side * nx * off, st.y + side * ny * off];
           const box: Box = { cx: center[0], cy: center[1], w, h, ang: st.angle };
           // text stays upright either way: its baseline is 0.35 * size below the box center along the text's own up
-          const baseline: XY = [center[0] - nx * sizeMm * 0.35, center[1] - ny * sizeMm * 0.35];
+          const baseline: XY = [center[0] - nx * sz * 0.35, center[1] - ny * sz * 0.35];
           if (insideBounds(box, lb) && !routeHits(route, box) && !taken.some((t) => overlap(t, box))) {
             taken.push(box);
             labels.push({ id: c.id, kind: 'river', text: name, x: baseline[0], y: baseline[1], anchor: 'middle', rotate: (st.angle * 180) / Math.PI });
@@ -375,48 +380,56 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
       return false;
     }
 
-    const r = c.marker ? markerR : 0;
+    const r = hasMarker ? markerR : 0;
     const markerBox = boxAt(c.x - r, c.y - r, c.x + r, c.y + r);
+    if (ov.noLabel) {
+      // marker only
+      if (!hasMarker) return false;
+      // its marker was reserved up front, so there is nothing to check
+      if (!taken.some((t) => overlap(t, markerBox))) taken.push(markerBox);
+      labels.push({ id: c.id, kind: c.kind, marker: [c.x, c.y], icon: c.icon, text: '', x: c.x, y: c.y, anchor: 'start' });
+      return true;
+    }
     const forced = ov.side && ov.side !== 'auto';
-    const sides = c.marker ? sideOrder(ov.side ?? 'auto') : (['middle'] as const);
+    const sides = hasMarker ? sideOrder(ov.side ?? 'auto') : (['middle'] as const);
 
     // A feature that sits on the route (a trailhead is where the route starts) can't avoid it on every side,
     // and one the user chose from the list should be drawn regardless. For those, if no side is clear,
     // take the side that crosses the route least instead of giving up.
-    const onRoute = c.marker && route.length > 1 && distToPolyline([c.x, c.y], route) < markerR * 2 + sizeMm;
+    const onRoute = hasMarker && route.length > 1 && distToPolyline([c.x, c.y], route) < markerR * 2 + sz;
     const relax = !!ov.pinned || onRoute || c.kind === 'custom';
     const fallbacks: { label: PlacedLabel; box: Box; crossing: number }[] = [];
 
     for (const side of sides) {
       let label: PlacedLabel;
       let box: Box;
-      const base = { id: c.id, kind: c.kind, marker: c.marker ? ([c.x, c.y] as XY) : undefined, icon: c.icon, text: name };
+      const base = { id: c.id, kind: c.kind, marker: hasMarker ? ([c.x, c.y] as XY) : undefined, icon: c.icon, text: name, ...(sz !== sizeMm ? { sizeMm: sz } : {}) };
       if (side === 'right') {
         const x = c.x + r + gap;
-        label = { ...base, x, y: c.y + sizeMm * 0.35, anchor: 'start' };
-        box = boxAt(x, c.y - sizeMm * 0.55, x + w, c.y + sizeMm * 0.45);
+        label = { ...base, x, y: c.y + sz * 0.35, anchor: 'start' };
+        box = boxAt(x, c.y - sz * 0.55, x + w, c.y + sz * 0.45);
       } else if (side === 'left') {
         const x = c.x - r - gap;
-        label = { ...base, x, y: c.y + sizeMm * 0.35, anchor: 'end' };
-        box = boxAt(x - w, c.y - sizeMm * 0.55, x, c.y + sizeMm * 0.45);
+        label = { ...base, x, y: c.y + sz * 0.35, anchor: 'end' };
+        box = boxAt(x - w, c.y - sz * 0.55, x, c.y + sz * 0.45);
       } else if (side === 'above') {
         const y = c.y - r - gap;
         label = { ...base, x: c.x, y, anchor: 'middle' };
-        box = boxAt(c.x - w / 2, y - sizeMm * 0.85, c.x + w / 2, y + sizeMm * 0.15);
+        box = boxAt(c.x - w / 2, y - sz * 0.85, c.x + w / 2, y + sz * 0.15);
       } else if (side === 'below') {
-        const y = c.y + r + gap + sizeMm * 0.8;
+        const y = c.y + r + gap + sz * 0.8;
         label = { ...base, x: c.x, y, anchor: 'middle' };
-        box = boxAt(c.x - w / 2, y - sizeMm * 0.85, c.x + w / 2, y + sizeMm * 0.15);
+        box = boxAt(c.x - w / 2, y - sz * 0.85, c.x + w / 2, y + sz * 0.15);
       } else {
-        label = { ...base, x: c.x, y: c.y + sizeMm * 0.35, anchor: 'middle' };
-        box = boxAt(c.x - w / 2, c.y - sizeMm * 0.55, c.x + w / 2, c.y + sizeMm * 0.45);
+        label = { ...base, x: c.x, y: c.y + sz * 0.35, anchor: 'middle' };
+        box = boxAt(c.x - w / 2, c.y - sz * 0.55, c.x + w / 2, c.y + sz * 0.45);
       }
       const inside = insideBounds(box, lb);
-      const labelsFree = !taken.some((t) => overlap(t, box)) && !(c.marker && side !== 'middle' && overlap(box, markerBox));
+      const labelsFree = !taken.some((t) => overlap(t, box)) && !(hasMarker && side !== 'middle' && overlap(box, markerBox));
       const crossesRoute = routeHits(route, box);
       if ((inside && labelsFree && !crossesRoute) || forced) {
         taken.push(box);
-        if (c.marker) taken.push(markerBox);
+        if (hasMarker) taken.push(markerBox);
         labels.push(label);
         return true;
       }
@@ -426,7 +439,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
     if (relax && fallbacks.length) {
       const best = fallbacks.reduce((p, q) => (q.crossing < p.crossing ? q : p));
       taken.push(best.box);
-      if (c.marker) taken.push(markerBox);
+      if (hasMarker) taken.push(markerBox);
       labels.push(best.label);
       return true;
     }

@@ -379,6 +379,24 @@ export function App() {
                 </select>
                 <button title="Move the map here" onClick={() => setRegion({ lat: c.lat, lon: c.lon })}>Center</button>
               </Row>
+              {(() => {
+                const ov = p.features.overrides[c.id] ?? {};
+                const edit = (patch: Partial<typeof ov>) => set((x) => { x.features.overrides[c.id] = { ...x.features.overrides[c.id], ...patch }; });
+                return (<>
+                  <Row label="Label">
+                    <select value={ov.side ?? 'auto'} disabled={!!ov.noLabel || !!ov.noMarker} title="Where the name goes" onChange={(e) => edit({ side: e.target.value as Side })}>
+                      <option value="auto">Auto</option><option value="right">Right</option><option value="left">Left</option>
+                      <option value="above">Above</option><option value="below">Below</option>
+                    </select>
+                    <input type="number" min={4} max={60} placeholder={String(p.features.sizePt)} title="Text size, pt" style={{ maxWidth: 58 }} value={ov.sizePt ?? ''} onChange={(e) => edit({ sizePt: +e.target.value > 0 ? +e.target.value : undefined })} />
+                    <span className="unit">pt</span>
+                  </Row>
+                  <div className="kinds">
+                    <label><input type="checkbox" checked={!ov.noLabel} onChange={(e) => edit({ noLabel: !e.target.checked, ...(e.target.checked ? {} : { noMarker: false }) })} /> Name</label>
+                    <label><input type="checkbox" checked={!ov.noMarker} onChange={(e) => edit({ noMarker: !e.target.checked, ...(e.target.checked ? {} : { noLabel: false }) })} /> Marker</label>
+                  </div>
+                </>);
+              })()}
               <div className="hint">{c.lat.toFixed(5)}, {c.lon.toFixed(5)}{p.features.overrides[c.id]?.hidden ? ' · not shown' : region && !placed ? ' · outside the map, or no room for its label' : ''}</div>
             </div>
           );

@@ -280,3 +280,60 @@ describe('Overpass mirrors and diagnostics', () => {
     expect(d.hosts).toHaveLength(3);
   });
 });
+
+describe('formatting the label of one of my landmarks', () => {
+  const home = lm('custom-1', 'Home', 'custom', 46.1, -121.2);
+  const run = (ov: NonNullable<ReturnType<typeof defaultFeatures>['overrides'][string]>) => {
+    const s = defaultFeatures();
+    s.overrides['custom-1'] = ov;
+    return placeLandmarks(input([home], { settings: s })).labels;
+  };
+  it('the name goes on the side you choose', () => {
+    expect(run({ side: 'left' })[0]).toMatchObject({ anchor: 'end' });
+    expect(run({ side: 'right' })[0]).toMatchObject({ anchor: 'start' });
+    const above = run({ side: 'above' })[0]!;
+    const below = run({ side: 'below' })[0]!;
+    expect(above).toMatchObject({ anchor: 'middle' });
+    expect(above.y).toBeLessThan(below.y);
+  });
+  it('its own text size changes the label and leaves others alone', () => {
+    expect(run({ sizePt: 24 })[0]!.sizeMm).toBeCloseTo(24 * 25.4 / 72, 6);
+    expect(run({})[0]!.sizeMm).toBeUndefined();
+  });
+  it('a bigger name needs more room, so it is wider on the page', () => {
+    const wide = (labels: ReturnType<typeof run>) => labels[0]!.text.length * (labels[0]!.sizeMm ?? 4);
+    expect(wide(run({ sizePt: 30 }))).toBeGreaterThan(wide(run({})));
+  });
+  it('marker only: no text, the marker stays', () => {
+    const [l] = run({ noLabel: true });
+    expect(l).toMatchObject({ text: '', marker: expect.any(Array) });
+  });
+  it('name only: no marker, the name is centered on the spot', () => {
+    const [l] = run({ noMarker: true });
+    expect(l!.marker).toBeUndefined();
+    expect(l).toMatchObject({ text: 'Home', anchor: 'middle' });
+  });
+  it('in the scene: marker-only draws no text, name-only draws no marker', () => {
+    const scene = (ov: object) => {
+      const p = cityProject((q) => {
+        q.features.enabled = true;
+        q.custom = [{ id: 'custom-1', name: 'Home', kind: 'custom', lat: 47.6062, lon: -122.3321, icon: 'home' }];
+        q.features.overrides['custom-1'] = ov;
+      });
+      return buildScene(p, { layers: {}, landmarks: [] }).prims;
+    };
+    const markers = (ps: ReturnType<typeof scene>) => ps.filter((x) => x.kind === 'path' && x.round).length;
+    const names = (ps: ReturnType<typeof scene>) => ps.filter((x) => x.kind === 'text' && x.text === 'Home').length;
+    expect([markers(scene({})), names(scene({}))]).toEqual([1, 1]);
+    expect([markers(scene({ noLabel: true })), names(scene({ noLabel: true }))]).toEqual([1, 0]);
+    expect([markers(scene({ noMarker: true })), names(scene({ noMarker: true }))]).toEqual([0, 1]);
+  });
+  it('the chosen size reaches the drawn text', () => {
+    const p = cityProject((q) => {
+      q.custom = [{ id: 'custom-1', name: 'Home', kind: 'custom', lat: 47.6062, lon: -122.3321 }];
+      q.features.overrides['custom-1'] = { sizePt: 30 };
+    });
+    const t = buildScene(p, { layers: {}, landmarks: [] }).prims.find((x) => x.kind === 'text' && x.text === 'Home') as { sizeMm: number };
+    expect(t.sizeMm).toBeCloseTo(30 * 25.4 / 72, 6);
+  });
+});
