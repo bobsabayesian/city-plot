@@ -83,3 +83,41 @@ export function simplifyXY(pts: XY[], tol: number): XY[] {
   }
   return pts.filter((_, i) => keep[i]);
 }
+
+/** Clip a ring to a rectangle (Sutherland-Hodgman). The result is a closed ring without the repeated end point; may be empty. */
+export function clipPolygon(ring: XY[], r: Rect): XY[] {
+  const x1 = r.x + r.w;
+  const y1 = r.y + r.h;
+  const edges: { inside: (p: XY) => boolean; cut: (a: XY, b: XY) => XY }[] = [
+    { inside: (p) => p[0] >= r.x, cut: (a, b) => [r.x, a[1] + ((b[1] - a[1]) * (r.x - a[0])) / (b[0] - a[0])] },
+    { inside: (p) => p[0] <= x1, cut: (a, b) => [x1, a[1] + ((b[1] - a[1]) * (x1 - a[0])) / (b[0] - a[0])] },
+    { inside: (p) => p[1] >= r.y, cut: (a, b) => [a[0] + ((b[0] - a[0]) * (r.y - a[1])) / (b[1] - a[1]), r.y] },
+    { inside: (p) => p[1] <= y1, cut: (a, b) => [a[0] + ((b[0] - a[0]) * (y1 - a[1])) / (b[1] - a[1]), y1] },
+  ];
+  let out = ring.length > 1 && ring[0]![0] === ring[ring.length - 1]![0] && ring[0]![1] === ring[ring.length - 1]![1] ? ring.slice(0, -1) : ring;
+  for (const e of edges) {
+    const input = out;
+    out = [];
+    for (let i = 0; i < input.length; i++) {
+      const cur = input[i]!;
+      const prev = input[(i + input.length - 1) % input.length]!;
+      if (e.inside(cur)) {
+        if (!e.inside(prev)) out.push(e.cut(prev, cur));
+        out.push(cur);
+      } else if (e.inside(prev)) out.push(e.cut(prev, cur));
+    }
+    if (!out.length) break;
+  }
+  return out.length >= 3 ? out : [];
+}
+
+/** True if (x, y) is inside the ring (even-odd). */
+export function pointInRing(x: number, y: number, ring: XY[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!;
+    const [xj, yj] = ring[j]!;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}

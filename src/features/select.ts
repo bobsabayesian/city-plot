@@ -1,6 +1,6 @@
 import { clipPolyline, type Rect, type XY } from '../geo/clip';
 import type { Fit } from '../geo/project';
-import type { FeatureSettings, LabelKind, Landmark, Side, WaterLine } from './types';
+import type { CustomIcon, FeatureSettings, LabelKind, Landmark, Side, WaterLine } from './types';
 
 export interface LandmarkEntry {
   id: string;
@@ -18,6 +18,8 @@ export interface PlacedLabel {
   kind: LabelKind;
   /** marker center, poster mm; undefined for lakes and rivers (label only) */
   marker?: XY;
+  /** user landmarks: which marker to draw */
+  icon?: CustomIcon;
   text: string;
   x: number;
   y: number;
@@ -43,7 +45,7 @@ export interface PlaceInput {
 /** An oriented rectangle: center, size, and turn in radians (clockwise on screen). */
 export interface Box { cx: number; cy: number; w: number; h: number; ang: number }
 interface Candidate {
-  id: string; name: string; kind: LabelKind; x: number; y: number; score: number; marker: boolean; ele?: number;
+  id: string; name: string; kind: LabelKind; x: number; y: number; score: number; marker: boolean; icon?: CustomIcon;
   /** its kind is switched on (otherwise it is only available from the list) */
   enabled: boolean;
   /** river names: unit direction of the stretch the label follows, in radians, kept upright */
@@ -53,8 +55,10 @@ interface Candidate {
 }
 
 const KIND_WEIGHT: Record<LabelKind, number> = {
-  waypoint: 100, trailhead: 1.2, hut: 1.1, peak: 1, pass: 1, lake: 0.6, viewpoint: 0.7, river: 0.7,
+  custom: 100, attraction: 1.2, museum: 1, historic: 1, station: 0.9, university: 0.9, stadium: 0.9, park: 0.8, worship: 0.6, lake: 0.6, river: 0.7,
 };
+/** Landmarks that OpenStreetMap links to Wikipedia or Wikidata rank this much higher. */
+const NOTABLE_BONUS = 1.5;
 const MAX_CANDIDATES = 80;
 const MAX_LISTED = 30;
 const MIN_LAKE_AREA_MM2 = 6;
@@ -244,7 +248,6 @@ export interface PoolItem {
   name: string;
   kind: LabelKind;
   group: LabelGroup;
-  ele?: number;
   /** why it is not drawn */
   reason: 'kind off' | 'hidden' | 'no room' | 'not chosen';
 }
@@ -274,9 +277,6 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   const { settings: s, fit, frame, route, sizeMm, markerR } = inp;
   const inFrame = ([x, y]: XY) => x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h;
 
-  const eleVals = inp.landmarks.filter((l) => l.kind === 'peak' && l.ele !== undefined).map((l) => l.ele!);
-  const eMin = Math.min(...eleVals);
-  const eSpan = Math.max(Math.max(...eleVals) - eMin, 1);
   const proximityScale = 0.1 * Math.min(frame.w, frame.h);
 
   const cands: Candidate[] = [];
@@ -291,8 +291,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   for (const l of inp.landmarks) {
     if (!l.name.trim()) continue;
     const [x, y] = fit.toMm(l.lat, l.lon);
-    const eleBonus = l.kind === 'peak' && l.ele !== undefined && eleVals.length > 1 ? 2 * ((l.ele - eMin) / eSpan) : 0;
-    addCand({ id: l.id, name: l.name, kind: l.kind, x, y, marker: true, ele: l.ele, enabled: s.kinds[l.kind], base: KIND_WEIGHT[l.kind] + eleBonus });
+    addCand({ id: l.id, name: l.name, kind: l.kind, x, y, marker: true, icon: l.icon, enabled: s.kinds[l.kind], base: KIND_WEIGHT[l.kind] + (l.notable ? NOTABLE_BONUS : 0) });
   }
 
   const lb = inp.labelBounds ?? frame;
@@ -385,13 +384,13 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
     // and one the user chose from the list should be drawn regardless. For those, if no side is clear,
     // take the side that crosses the route least instead of giving up.
     const onRoute = c.marker && route.length > 1 && distToPolyline([c.x, c.y], route) < markerR * 2 + sizeMm;
-    const relax = !!ov.pinned || onRoute;
+    const relax = !!ov.pinned || onRoute || c.kind === 'custom';
     const fallbacks: { label: PlacedLabel; box: Box; crossing: number }[] = [];
 
     for (const side of sides) {
       let label: PlacedLabel;
       let box: Box;
-      const base = { id: c.id, kind: c.kind, marker: c.marker ? ([c.x, c.y] as XY) : undefined, text: name };
+      const base = { id: c.id, kind: c.kind, marker: c.marker ? ([c.x, c.y] as XY) : undefined, icon: c.icon, text: name };
       if (side === 'right') {
         const x = c.x + r + gap;
         label = { ...base, x, y: c.y + sizeMm * 0.35, anchor: 'start' };
@@ -438,18 +437,20 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
     const group = groupOf(c.kind);
     const ov = s.overrides[c.id] ?? {};
     const name = (ov.name ?? c.name).trim() || c.name;
-    const entry: LandmarkEntry = { id: c.id, name, kind: c.kind, hidden: !!ov.hidden, pinned: !!ov.pinned, placed: false };
+    // the user's own landmarks are always drawn and never use up a slot
+    const own = c.kind === 'custom';
+    const entry: LandmarkEntry = { id: c.id, name, kind: c.kind, hidden: !!ov.hidden, pinned: !!ov.pinned || own, placed: false };
     if (entry.hidden) {
       entries.push(entry);
       status.set(c.id, 'hidden');
-      if (!pinned) V[group]++; // a hidden auto label keeps its slot open; a removed pin gives its slot back
+      if (!pinned && !own) V[group]++; // a hidden auto label keeps its slot open; a removed pin gives its slot back
       return;
     }
-    if (pinned ? P[group] >= budget[group] : full(group)) return;
+    if (!own && (pinned ? P[group] >= budget[group] : full(group))) return;
     entries.push(entry);
     if (place(c, name, ov)) {
       entry.placed = true;
-      (pinned ? P : A)[group]++;
+      if (!own) (pinned ? P : A)[group]++;
       status.set(c.id, 'drawn');
     } else {
       status.set(c.id, 'no room');
@@ -457,10 +458,10 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   };
 
   // 1. what the user chose from the list, then 2. ranked candidates of switched-on kinds
-  for (const c of unique) if (s.overrides[c.id]?.pinned) consider(c, true);
+  for (const c of unique) if (s.overrides[c.id]?.pinned || (c.kind === 'custom' && c.enabled)) consider(c, true);
   for (const c of unique) {
     if (entries.length >= MAX_LISTED) break;
-    if (s.overrides[c.id]?.pinned || !c.enabled) continue;
+    if (s.overrides[c.id]?.pinned || !c.enabled || c.kind === 'custom') continue;
     if (full('point') && full('water')) break;
     consider(c, false);
   }
@@ -469,7 +470,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   const pool: PoolItem[] = unique
     .filter((c) => status.get(c.id) !== 'drawn')
     .map((c): PoolItem => ({
-      id: c.id, name: (s.overrides[c.id]?.name ?? c.name).trim() || c.name, kind: c.kind, group: groupOf(c.kind), ele: c.ele,
+      id: c.id, name: (s.overrides[c.id]?.name ?? c.name).trim() || c.name, kind: c.kind, group: groupOf(c.kind),
       reason: status.get(c.id) === 'hidden' ? 'hidden' : status.get(c.id) === 'no room' ? 'no room' : c.enabled ? 'not chosen' : 'kind off',
     }))
     .slice(0, MAX_POOL);

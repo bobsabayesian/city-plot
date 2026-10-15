@@ -1,5 +1,8 @@
 /** Shared by the Cloudflare Worker (production) and the Vite dev server (local). */
-const UA = 'hike-plot/0.1 (https://hike.bobsabayesian.io)';
+import { LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_MAX_KM, SNAP_DEG, type LayerKey, type Way } from '../src/city/types';
+import type { Landmark, LandmarkKind } from '../src/features/types';
+
+const UA = 'city-plot/0.1 (pen plotter map posters)';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 /**
  * Tried in order. The main server sometimes refuses requests from Cloudflare's network (HTTP 521), so the
@@ -17,79 +20,151 @@ const json = (data: unknown, status = 200) =>
     headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=3600, s-maxage=86400' },
   });
 
-/** Overpass elements -> the landmarks and water lines the client draws. */
-export function normalizeFeatures(elements: any[]) {
-  const landmarks: any[] = [];
-  const water: any[] = [];
-  for (const el of elements) {
-    const t = el.tags ?? {};
-    if (!t.name) continue;
-    if (el.type === 'node') {
-      const kind =
-        t.natural === 'peak' ? 'peak'
-        : t.natural === 'saddle' || t.mountain_pass === 'yes' ? 'pass'
-        : t.tourism === 'alpine_hut' || t.tourism === 'wilderness_hut' ? 'hut'
-        : t.tourism === 'viewpoint' ? 'viewpoint'
-        : t.highway === 'trailhead' ? 'trailhead'
-        : undefined;
-      if (!kind) continue;
-      const ele = Number.parseFloat(String(t.ele ?? ''));
-      landmarks.push({ id: `n${el.id}`, name: t.name, kind, lat: el.lat, lon: el.lon, ...(Number.isFinite(ele) ? { ele } : {}) });
-    } else if (el.type === 'way' && Array.isArray(el.geometry) && el.geometry.length > 1) {
-      const kind = t.natural === 'water' ? 'lake' : t.waterway === 'river' || t.waterway === 'stream' ? 'river' : undefined;
-      if (!kind) continue;
-      water.push({ id: `w${el.id}`, kind, name: t.name, coords: el.geometry.map((g: any) => [g.lat, g.lon]) });
-    }
+const r5 = (v: number) => Math.round(v * 1e5) / 1e5;
+
+type Pt = [number, number];
+/** A way's geometry as [lat, lon] points. Nodes outside an `out geom(bbox)` area arrive as null and break the line. */
+const geometryPieces = (geometry: ({ lat: number; lon: number } | null)[] | undefined): Pt[][] => {
+  const pieces: Pt[][] = [];
+  let cur: Pt[] = [];
+  for (const g of geometry ?? []) {
+    if (g && Number.isFinite(g.lat) && Number.isFinite(g.lon)) cur.push([r5(g.lat), r5(g.lon)]);
+    else { if (cur.length > 1) pieces.push(cur); cur = []; }
   }
-  return { landmarks, water };
+  if (cur.length > 1) pieces.push(cur);
+  return pieces;
+};
+
+const same = (a: Pt, b: Pt) => a[0] === b[0] && a[1] === b[1];
+const flat = (pts: Pt[]) => pts.flatMap(([la, lo]) => [la, lo]);
+
+/** Join line pieces that share an end point into longer lines (and closed rings where they meet up). */
+export function stitch(pieces: Pt[][]): Pt[][] {
+  const todo = pieces.map((p) => [...p]);
+  const done: Pt[][] = [];
+  while (todo.length) {
+    let cur = todo.pop()!;
+    for (let grew = true; grew && !same(cur[0]!, cur[cur.length - 1]!); ) {
+      grew = false;
+      for (let i = 0; i < todo.length; i++) {
+        const o = todo[i]!;
+        const [cs, ce] = [cur[0]!, cur[cur.length - 1]!];
+        const [os, oe] = [o[0]!, o[o.length - 1]!];
+        let joined: Pt[] | undefined;
+        if (same(ce, os)) joined = [...cur, ...o.slice(1)];
+        else if (same(ce, oe)) joined = [...cur, ...[...o].reverse().slice(1)];
+        else if (same(cs, oe)) joined = [...o, ...cur.slice(1)];
+        else if (same(cs, os)) joined = [...[...o].reverse(), ...cur.slice(1)];
+        if (joined) { cur = joined; todo.splice(i, 1); grew = true; break; }
+      }
+    }
+    done.push(cur);
+  }
+  return done;
 }
 
-/** Overpass tag filters per point kind (each is combined with a name filter). */
-const NODE_CLAUSES: Record<string, string[]> = {
-  peak: ['["natural"="peak"]'],
-  pass: ['["natural"="saddle"]', '["mountain_pass"="yes"]'],
-  hut: ['["tourism"~"^(alpine_hut|wilderness_hut)$"]'],
-  viewpoint: ['["tourism"="viewpoint"]'],
-  trailhead: ['["highway"="trailhead"]'],
+const waterSub = (t: Record<string, string>) =>
+  t.natural === 'coastline' ? 'coastline' : t.natural === 'water' || t.waterway === 'riverbank' || t.natural === 'bay' ? 'lake' : t.waterway;
+
+/**
+ * Overpass ways (and multipolygon relations, for the layers whose areas are often relations) -> the flat way
+ * lists the client draws. Coordinates are rounded to 1e-5 degrees (about a meter), which keeps big answers small.
+ */
+export function normalizeWays(elements: any[], layer: LayerKey): Way[] {
+  const out: Way[] = [];
+  for (const el of elements) {
+    const t: Record<string, string> = el.tags ?? {};
+    const sub = layer === 'water' ? waterSub(t) : undefined;
+    const name = layer === 'water' || layer === 'parks' ? t.name : undefined;
+    const make = (id: string, pts: Pt[]): Way => {
+      const closed = pts.length >= 4 && same(pts[0]!, pts[pts.length - 1]!);
+      return { id, ...(name ? { name } : {}), ...(sub ? { sub } : {}), closed, pts: flat(pts) };
+    };
+    if (el.type === 'way') {
+      geometryPieces(el.geometry).forEach((p, i) => out.push(make(i ? `w${el.id}-${i}` : `w${el.id}`, p)));
+    } else if (el.type === 'relation' && Array.isArray(el.members)) {
+      // outer boundaries are stitched into rings; holes (inner) are rings of their own, which fill with the even-odd rule
+      const pieces = (el.members as any[]).filter((m) => m.type === 'way').flatMap((m) => geometryPieces(m.geometry));
+      stitch(pieces).forEach((p, i) => out.push(make(`r${el.id}-${i}`, p)));
+    }
+  }
+  return out;
+}
+
+/** Overpass element -> a landmark (or undefined when it is not one of the kinds we draw). */
+export function toLandmark(el: any): Landmark | undefined {
+  const t: Record<string, string> = el.tags ?? {};
+  if (!t.name) return undefined;
+  const lat = el.type === 'node' ? el.lat : el.center?.lat;
+  const lon = el.type === 'node' ? el.lon : el.center?.lon;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return undefined;
+  const kind: LandmarkKind | undefined =
+    t.tourism === 'attraction' ? 'attraction'
+    : t.tourism === 'museum' || t.tourism === 'gallery' ? 'museum'
+    : t.historic ? 'historic'
+    : t.amenity === 'place_of_worship' ? 'worship'
+    : t.railway === 'station' || t.public_transport === 'station' ? 'station'
+    : t.leisure === 'park' ? 'park'
+    : t.amenity === 'university' ? 'university'
+    : t.leisure === 'stadium' ? 'stadium'
+    : undefined;
+  if (!kind) return undefined;
+  return { id: `${el.type[0]}${el.id}`, name: t.name, kind, lat: r5(lat), lon: r5(lon), ...(t.wikidata || t.wikipedia ? { notable: true } : {}) };
+}
+
+/** Overpass filters (ways, and relations where noted) for each map layer, before the bounding box. */
+const HIGHWAY = (re: string, extra = '') => [`way["highway"~"^(${re})$"]${extra}`];
+export const LAYER_CLAUSES: Record<LayerKey, string[]> = {
+  major: HIGHWAY('motorway|motorway_link|trunk|trunk_link|primary|primary_link'),
+  secondary: HIGHWAY('secondary|secondary_link|tertiary|tertiary_link'),
+  minor: HIGHWAY('residential|unclassified|living_street|road|service', '["service"!~"^(driveway|parking_aisle|drive-through|emergency_access)$"]'),
+  paths: HIGHWAY('footway|pedestrian|cycleway|path|steps|track|bridleway'),
+  rail: ['way["railway"~"^(rail|light_rail|tram|narrow_gauge)$"]["tunnel"!="yes"]["service"!~"."]'],
+  buildings: ['way["building"]'],
+  water: [
+    'way["natural"="water"]', 'way["waterway"="riverbank"]', 'way["waterway"~"^(river|canal)$"]["tunnel"!="yes"]', 'way["natural"="coastline"]',
+    'relation["natural"="water"]', 'relation["waterway"="riverbank"]',
+  ],
+  parks: [
+    'way["leisure"~"^(park|garden|nature_reserve)$"]', 'way["landuse"~"^(grass|recreation_ground|village_green|forest)$"]', 'way["natural"="wood"]',
+    'relation["leisure"~"^(park|garden|nature_reserve)$"]', 'relation["landuse"~"^(grass|forest)$"]',
+  ],
+};
+/** Most elements asked of Overpass per layer; an answer this long may be cut short. */
+export const LAYER_LIMIT: Record<LayerKey, number> = {
+  major: 5000, secondary: 8000, minor: 30000, paths: 30000, rail: 5000, buildings: 60000, water: 3000, parks: 6000,
 };
 
 export interface Box { minLat: number; maxLat: number; minLon: number; maxLon: number }
 
-/**
- * Grid sizes (degrees) a request is snapped outward to. The smallest grid at least as big as the request is
- * used, so any view of the same place maps to the same few squares and shares one cached answer. Blocks are at
- * most two squares wide, and the 0.175 grid keeps blocks within the water-query limit.
- */
-export const SNAP_GRIDS = [0.05, 0.1, 0.175, 0.5];
-export const MAX_REQUEST_SPAN = 0.5;
-const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
-
+/** Round a box outward to a fixed grid, so views of the same place that differ a little share one query and one cached answer. */
 export function snapBBox(b: Box): Box {
-  const span = Math.max(b.maxLat - b.minLat, b.maxLon - b.minLon);
-  const g = SNAP_GRIDS.find((x) => x >= span - 1e-9) ?? SNAP_GRIDS[SNAP_GRIDS.length - 1]!; // tolerance: 46.2 - 46.1 is not exactly 0.1
+  const g = SNAP_DEG;
+  const r = (v: number) => Math.round(v * 1e4) / 1e4;
   return {
-    minLat: r4(Math.max(-90, Math.floor(b.minLat / g + 1e-9) * g)),
-    maxLat: r4(Math.min(90, Math.ceil(b.maxLat / g - 1e-9) * g)),
-    minLon: r4(Math.max(-180, Math.floor(b.minLon / g + 1e-9) * g)),
-    maxLon: r4(Math.min(180, Math.ceil(b.maxLon / g - 1e-9) * g)),
+    minLat: r(Math.max(-90, Math.floor(b.minLat / g + 1e-9) * g)),
+    maxLat: r(Math.min(90, Math.ceil(b.maxLat / g - 1e-9) * g)),
+    minLon: r(Math.max(-180, Math.floor(b.minLon / g + 1e-9) * g)),
+    maxLon: r(Math.min(180, Math.ceil(b.maxLon / g - 1e-9) * g)),
   };
 }
 
-/**
- * The request that identifies an answer in the cache. Different views of one place, and different spellings of
- * one search, become the same key, so they share a cached response.
- */
+/** Rough size of a box in km (width, height). */
+export const boxKm = (b: Box): [number, number] => [
+  (b.maxLon - b.minLon) * 111.32 * Math.cos((((b.minLat + b.maxLat) / 2) * Math.PI) / 180),
+  (b.maxLat - b.minLat) * 110.57,
+];
+
+/** The request that identifies an answer in the cache: different views of one place share it. */
 export function cacheKey(req: Request): Request {
   const url = new URL(req.url);
-  if (url.pathname === '/api/features') {
+  if (url.pathname === '/api/layer' || url.pathname === '/api/landmarks') {
     const [s, n, w, e] = ['minLat', 'maxLat', 'minLon', 'maxLon'].map((k) => num(url.searchParams.get(k)));
     if ([s, n, w, e].every((v) => v !== undefined)) {
       const b = snapBBox({ minLat: s!, maxLat: n!, minLon: w!, maxLon: e! });
       const key = new URL(url.origin + url.pathname);
       key.searchParams.set('bbox', `${b.minLat},${b.minLon},${b.maxLat},${b.maxLon}`);
-      const kinds = url.searchParams.get('kinds');
-      key.searchParams.set('kinds', kinds === null ? '*' : kinds.split(',').filter(Boolean).sort().join(','));
-      for (const f of ['lakes', 'rivers']) key.searchParams.set(f, url.searchParams.has(f) ? url.searchParams.get(f)! : '1');
+      for (const f of ['layer', 'notable']) if (url.searchParams.has(f)) key.searchParams.set(f, url.searchParams.get(f)!);
       return new Request(key.toString());
     }
   }
@@ -103,9 +178,6 @@ export function cacheKey(req: Request): Request {
   }
   return req;
 }
-
-/** Water queries get slow and flaky past this span (degrees); skip them rather than fail. */
-const WATER_MAX_SPAN = 0.35;
 
 export interface Attempt { host: string; result: string; ms: number }
 
@@ -122,7 +194,7 @@ export const summarize = (a: Attempt[]) => a.map((x) => `${x.host} ${x.result}`)
  * POST an Overpass query, falling through the mirror list on any failure: HTTP errors, timeouts, non-JSON
  * bodies, or a 200 that only carries a "runtime error" remark (Overpass does this when it runs out of time).
  */
-async function overpass(query: string, budgetMs = 22000): Promise<any[]> {
+async function overpass(query: string, budgetMs = 22000, hostMs = 9000): Promise<any[]> {
   const start = Date.now();
   const attempts: Attempt[] = [];
   for (const url of OVERPASS_HOSTS) {
@@ -136,7 +208,7 @@ async function overpass(query: string, budgetMs = 22000): Promise<any[]> {
         method: 'POST',
         headers: { 'user-agent': UA, 'content-type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(Math.min(9000, left)),
+        signal: AbortSignal.timeout(Math.min(hostMs, left)),
       });
       if (!r.ok) { note(String(r.status)); continue; }
       const d = (await r.json()) as { elements?: any[]; remark?: string };
@@ -189,11 +261,45 @@ export function normalizeGeocode(hits: any[]) {
     });
 }
 
+const readBox = (url: URL): Box | undefined => {
+  const [s, n, w, e] = ['minLat', 'maxLat', 'minLon', 'maxLon'].map((k) => num(url.searchParams.get(k)));
+  return [s, n, w, e].some((v) => v === undefined) ? undefined : { minLat: s!, maxLat: n!, minLon: w!, maxLon: e! };
+};
+
 const num = (v: string | null) => (v !== null && v.trim() !== '' && Number.isFinite(+v) ? +v : undefined);
 
-export async function handleApi(req: Request): Promise<Response | null> {
+/** The slice of an R2 bucket the export route uses. */
+export interface FilesBucket { put(key: string, body: ArrayBuffer, opts?: { httpMetadata?: { contentType?: string } }): Promise<unknown> }
+export interface ApiEnv { FILES?: FilesBucket }
+
+export const MAX_EXPORT_BYTES = 30 * 1024 * 1024;
+const EXPORT_TYPES: Record<string, string> = { svg: 'image/svg+xml', png: 'image/png', json: 'application/json' };
+
+/** Where an uploaded file is kept: `city-plot/<session>/<time>-<name>`. Undefined when the session or name is not safe. */
+export function exportKey(name: string, session: string, now = new Date()): string | undefined {
+  const m = name.toLowerCase().match(/^([a-z0-9][a-z0-9._-]{0,80})\.(svg|png|json)$/);
+  if (!m || !/^[a-z0-9-]{8,64}$/.test(session)) return undefined;
+  return `city-plot/${session}/${now.toISOString().replace(/[:.]/g, '-')}-${m[1]!.replace(/\.+/g, '-')}.${m[2]}`;
+}
+
+async function saveExport(req: Request, url: URL, env: ApiEnv): Promise<Response> {
+  if (!env.FILES) return json({ error: 'no storage bucket is connected' }, 501);
+  const key = exportKey(url.searchParams.get('name') ?? '', url.searchParams.get('session') ?? '');
+  if (!key) return json({ error: 'bad file name or session' }, 400);
+  const body = await req.arrayBuffer();
+  if (!body.byteLength || body.byteLength > MAX_EXPORT_BYTES) return json({ error: 'file empty or too large' }, 413);
+  await env.FILES.put(key, body, { httpMetadata: { contentType: EXPORT_TYPES[key.slice(key.lastIndexOf('.') + 1)]! } });
+  const res = json({ key });
+  res.headers.set('cache-control', 'no-store');
+  return res;
+}
+
+export async function handleApi(req: Request, env: ApiEnv = {}): Promise<Response | null> {
   const url = new URL(req.url);
   if (!url.pathname.startsWith('/api/')) return null;
+  if (url.pathname === '/api/export' && req.method === 'POST') {
+    try { return await saveExport(req, url, env); } catch (e) { return json({ error: e instanceof Error ? e.message : 'save failed' }, 500); }
+  }
   if (req.method !== 'GET') return json({ error: 'method not allowed' }, 405);
 
   const cache = url.pathname === '/api/health' ? undefined : (globalThis as { caches?: { default?: Cache } }).caches?.default;
@@ -229,61 +335,48 @@ async function route(url: URL): Promise<Response> {
       if (!r.ok) return json({ error: 'geocoder unavailable' }, 502);
       const d = (await r.json()) as any;
       const a = d.address ?? {};
-      const place = a.county ?? a.city ?? a.town ?? a.state_district ?? a.municipality;
+      const place = a.city ?? a.town ?? a.village ?? a.municipality ?? a.county ?? a.state_district;
       const region = a.state ?? a.country;
       return json({ location: [place, region].filter(Boolean).join(', ') });
     }
     case '/api/health':
       return health();
-    case '/api/peaks': {
-      const [s, n, w, e] = ['minLat', 'maxLat', 'minLon', 'maxLon'].map((k) => num(url.searchParams.get(k)));
-      if ([s, n, w, e].some((v) => v === undefined)) return json({ error: 'missing bbox' }, 400);
-      if ((n! - s!) > 1 || (e! - w!) > 1) return json({ error: 'bbox too large' }, 400);
-      const query = `[out:json][timeout:15];node["natural"="peak"]["name"](${s},${w},${n},${e});out body 100;`;
-      const elements = await overpass(query);
-      return json({
-        peaks: elements.map((x: any) => ({ name: x.tags.name, lat: x.lat, lon: x.lon, ele: num(x.tags.ele ?? null) })),
-      });
-    }
-    case '/api/features': {
-      const [s, n, w, e] = ['minLat', 'maxLat', 'minLon', 'maxLon'].map((k) => num(url.searchParams.get(k)));
-      if ([s, n, w, e].some((v) => v === undefined)) return json({ error: 'missing bbox' }, 400);
-      if ((n! - s!) > MAX_REQUEST_SPAN || (e! - w!) > MAX_REQUEST_SPAN) return json({ error: 'area too large for landmarks' }, 400);
-      // Snap outward to a fixed grid so every view of this place is the same query (and the same cached answer).
-      const covers = snapBBox({ minLat: s!, maxLat: n!, minLon: w!, maxLon: e! });
+    case '/api/layer': {
+      const layer = url.searchParams.get('layer') as LayerKey | null;
+      if (!layer || !LAYER_KEYS.includes(layer)) return json({ error: 'unknown layer' }, 400);
+      const box = readBox(url);
+      if (!box) return json({ error: 'missing bbox' }, 400);
+      const [w, h] = boxKm(box);
+      // the client pads what it asks for by up to 30%, so allow some room over the layer's own limit
+      if (Math.max(w, h) > LAYER_MAX_KM[layer] * 1.5 + 1) return json({ error: `area too large for ${layer}` }, 400);
+      const covers = snapBBox(box);
       const bb = `(${covers.minLat},${covers.minLon},${covers.maxLat},${covers.maxLon})`;
-      // Ask only for what the client shows: fewer clauses means a cheaper query on a busy public server.
-      // With no params at all (older clients) everything is requested.
-      const kindsParam = url.searchParams.get('kinds');
-      const kinds = kindsParam === null ? Object.keys(NODE_CLAUSES) : kindsParam.split(',').filter((k) => k in NODE_CLAUSES);
-      const flag = (k: string) => (url.searchParams.has(k) ? url.searchParams.get(k) === '1' : true);
-      const wantLakes = flag('lakes');
-      const wantRivers = flag('rivers');
-      const nodeQuery = `[out:json][timeout:20];
-(${kinds.flatMap((k) => NODE_CLAUSES[k]!).map((c) => `node${c}["name"]${bb};`).join('')});out body 300;`;
-      const waterQuery = `[out:json][timeout:20];
-(${wantLakes ? `way["natural"="water"]["name"]${bb};` : ''}${wantRivers ? `way["waterway"="river"]["name"]${bb};` : ''});out geom 150;`;
-      // Point features are cheap and reliable; ways with geometry are what the public Overpass servers
-      // time out on. Fetch them separately so a water failure never costs the landmarks.
-      const waterTooBig = covers.maxLat - covers.minLat > WATER_MAX_SPAN + 1e-9 || covers.maxLon - covers.minLon > WATER_MAX_SPAN + 1e-9;
-      const [nodes, water] = await Promise.allSettled([
-        kinds.length ? overpass(nodeQuery) : Promise.resolve([]),
-        !wantLakes && !wantRivers ? Promise.resolve([]) : waterTooBig ? Promise.reject(new Error('area too large for water')) : overpass(waterQuery),
-      ]);
-      const why = (r: PromiseSettledResult<unknown>, part: string) =>
-        r.status === 'rejected' ? `${part}: ${r.reason instanceof Error ? r.reason.message.replace('overpass unavailable: ', '') : 'failed'}` : '';
-      if (nodes.status === 'rejected' && water.status === 'rejected')
-        return json({ error: `overpass unavailable. ${why(nodes, 'landmarks')}; ${why(water, 'water')}` }, 502);
-      const partial = [nodes.status === 'rejected' ? 'landmarks' : '', water.status === 'rejected' ? 'water' : ''].filter(Boolean);
-      const out = normalizeFeatures([
-        ...(nodes.status === 'fulfilled' ? nodes.value : []),
-        ...(water.status === 'fulfilled' ? water.value : []),
-      ]);
-      const reason = [why(nodes, 'landmarks'), why(water, 'water')].filter(Boolean).join('; ');
-      const res = json({ ...out, covers, partial, ...(reason ? { reason } : {}) });
-      // Don't let a degraded answer sit in the cache for a day.
-      if (partial.length) res.headers.set('cache-control', 'public, max-age=60, s-maxage=60');
+      const limit = LAYER_LIMIT[layer];
+      // ways come whole; relations (big lakes and parks) are cut to the box so a sea does not come back in full
+      const query = `[out:json][timeout:40][maxsize:536870912];
+(${LAYER_CLAUSES[layer].map((c) => `${c}${bb};`).join('')});out geom${LAYER_CLAUSES[layer].some((c) => c.startsWith('relation')) ? bb : ''} ${limit};`;
+      const elements = await overpass(query, 45000, 30000);
+      const res = json({ covers, ways: normalizeWays(elements, layer), ...(elements.length >= limit ? { truncated: true } : {}) });
+      if (elements.length >= limit) res.headers.set('cache-control', 'public, max-age=60, s-maxage=60');
       return res;
+    }
+    case '/api/landmarks': {
+      const box = readBox(url);
+      if (!box) return json({ error: 'missing bbox' }, 400);
+      if (Math.max(...boxKm(box)) > LANDMARKS_MAX_KM * 1.5 + 1) return json({ error: 'area too large for landmarks' }, 400);
+      const covers = snapBBox(box);
+      const bb = `(${covers.minLat},${covers.minLon},${covers.maxLat},${covers.maxLon})`;
+      const notable = url.searchParams.get('notable') === '1' ? '["wikidata"]' : '';
+      const clauses = [
+        '["tourism"="attraction"]', '["tourism"~"^(museum|gallery)$"]',
+        '["historic"~"^(monument|castle|fort|archaeological_site|ruins|building|city_gate|palace)$"]',
+        '["amenity"="place_of_worship"]', '["railway"="station"]', '["leisure"="park"]', '["amenity"="university"]', '["leisure"="stadium"]',
+      ];
+      const query = `[out:json][timeout:30];
+(${clauses.map((c) => `nwr${c}["name"]${notable}${bb};`).join('')});out center 2000;`;
+      const elements = await overpass(query, 35000, 25000);
+      const landmarks = elements.map(toLandmark).filter((l): l is Landmark => !!l);
+      return json({ covers, landmarks });
     }
     default:
       return json({ error: 'not found' }, 404);

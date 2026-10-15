@@ -26,7 +26,7 @@ export function PensPanel({ project: p, scene }: { project: Project; scene: Scen
   return (
     <>
       <h2>Pens</h2>
-      <div className="hint">Pens are what the plotter draws with. Each part of the design picks one; its color comes from the pen, and the tip width decides how many passes a heavy line needs.</div>
+      <div className="hint">Define the pens you will plot with (isograph nibs, black, green and blue to start). Every part of the map picks one of them: its color comes from the pen, and its tip width decides how many passes a thick line takes. Passes overlap by 20%.</div>
       {p.pens.map((pen, i) => {
         const sections = usedBy(pen.id);
         const passes = summarizePasses(scene.prims.filter((x) => (x as { pen?: string }).pen === pen.id), pen.tipMm);
@@ -35,13 +35,13 @@ export function PensPanel({ project: p, scene }: { project: Project; scene: Scen
             <div className="penrow">
               <input type="color" value={pen.color} title="Ink color" onChange={(e) => set((x) => { x.pens[i]!.color = e.target.value; })} />
               <input type="text" value={pen.name} title="Name" onChange={(e) => set((x) => { x.pens[i]!.name = e.target.value; })} />
-              <input type="number" min={0.05} max={5} step={0.05} value={pen.tipMm} title="Tip width, mm" onChange={(e) => set((x) => { x.pens[i]!.tipMm = Math.max(0.05, +e.target.value || 0.3); })} />
+              <input type="number" min={0.05} max={5} step={0.05} value={pen.tipMm} title="Nib width, mm" onChange={(e) => set((x) => { x.pens[i]!.tipMm = Math.max(0.05, +e.target.value || 0.3); })} />
               <span className="unit">mm</span>
               <button title="Remove this pen (its parts move to the first pen)" disabled={p.pens.length <= 1} onClick={() => set((x) => { removePen(x, pen.id); })}>×</button>
             </div>
             <div className="hint">
               {sections.length ? sections.join(', ') : 'Not used by anything'}
-              {passes.length ? ` · heavy lines: ${passes.map((q) => `${q.widthMm} mm = ${q.passes} passes`).join(', ')}` : ''}
+              {passes.length ? ` · thick lines: ${passes.map((q) => `${q.widthMm} mm = ${q.passes} passes`).join(', ')}` : ''}
             </div>
           </div>
         );

@@ -5,18 +5,30 @@
 export type Pt = [number, number];
 export interface Sub { pts: Pt[]; closed: boolean }
 
-/** How many passes of a `penMm` pen it takes to cover a `widthMm` line (at least `minPasses`, and at least one). */
-export const passCount = (widthMm: number, penMm: number, minPasses = 1) => Math.max(1, minPasses, Math.round(widthMm / penMm));
+/** Neighbouring passes overlap by this share of the pen tip, so a heavy line has no gaps and no visible seams. */
+export const PASS_OVERLAP = 0.2;
+
+/** Distance between the centers of neighbouring passes of a `penMm` pen. */
+export const passPitch = (penMm: number) => penMm * (1 - PASS_OVERLAP);
 
 /**
- * Sideways shift of each pass, centered on the original line. The passes overlap (the pitch never exceeds the
- * pen width, so there are no gaps) and are spaced at least 0.6 pen apart, so a forced extra pass on a thin line
- * still reads as clearly heavier than a single pass.
+ * How many passes of a `penMm` pen it takes to draw a `widthMm` line (at least `minPasses`, and at least one).
+ * N passes cover `penMm + (N - 1) * 0.8 * penMm`; the count is whichever N lands closest to the width asked for.
+ * A line thinner than the pen is one pass, drawn at the pen's own width.
  */
+export const passCount = (widthMm: number, penMm: number, minPasses = 1) =>
+  Math.max(1, minPasses, 1 + Math.round((widthMm - penMm) / passPitch(penMm)));
+
+/** The width N passes actually draw, which is what the line will measure on paper. */
+export const passWidth = (passes: number, penMm: number) => penMm + (Math.max(1, passes) - 1) * passPitch(penMm);
+
+/** The width a line really takes with this pen: the requested width snapped to a whole number of passes. */
+export const effectiveWidth = (widthMm: number, penMm: number, minPasses = 1) => +passWidth(passCount(widthMm, penMm, minPasses), penMm).toFixed(4);
+
+/** Sideways shift of each pass, centered on the original line, `passPitch` apart so neighbours overlap by 20%. */
 export function passOffsets(widthMm: number, penMm: number, minPasses = 1): number[] {
   const n = passCount(widthMm, penMm, minPasses);
-  if (n === 1) return [0];
-  const pitch = Math.min(penMm, Math.max(0.6 * penMm, (widthMm - penMm) / (n - 1)));
+  const pitch = passPitch(penMm);
   return Array.from({ length: n }, (_, k) => (k - (n - 1) / 2) * pitch);
 }
 

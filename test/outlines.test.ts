@@ -5,7 +5,7 @@ import { prepareScene, textToPath, PLOTTER_PEN_MM, type FontSet } from '../src/e
 import { sceneToSvg } from '../src/export/svg';
 import { buildScene } from '../src/scene/buildScene';
 import { defaultProject } from '../src/scene/project';
-import { sampleTrack } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 import type { TextPrim } from '../src/scene/types';
 
 const load = (path: string) => {
@@ -51,14 +51,14 @@ describe('text outlines', () => {
 });
 
 describe('export modes', () => {
-  const scene = buildScene({ ...defaultProject(), points: sampleTrack() });
+  const scene = buildScene(cityProject(), cityData());
   it('live keeps <text>', () => {
     expect(sceneToSvg(prepareScene(scene, 'live'))).toContain('<text');
   });
   it('print has no <text> and keeps fills', () => {
     const svg = sceneToSvg(prepareScene(scene, 'print', fonts));
     expect(svg).not.toContain('<text');
-    expect(svg).toContain('fill="#1f2a24" stroke="none"');
+    expect(svg).toContain('fill="#111111" fill-rule="evenodd" stroke="none"');
   });
   it('plotter is strokes only: no fills, no opacity, no text', () => {
     const out = prepareScene(scene, 'plotter', fonts);
@@ -69,8 +69,8 @@ describe('export modes', () => {
   it('plotter layers are all strokes at the one pen width, so one layer per color', () => {
     const svg = sceneToSvg(prepareScene(scene, 'plotter', fonts));
     const ids = [...svg.matchAll(/<g id="(layer-[^"]+)"/g)].map((m) => m[1]!);
-    // route (orange) and everything else (ink): heavy lines became repeated passes of the same pen
-    expect(ids).toHaveLength(2);
+    // black, green and blue pens: heavy lines became repeated passes of the same pen
+    expect(ids).toHaveLength(3);
     expect(ids.every((i) => i.endsWith(`-${PLOTTER_PEN_MM}mm`))).toBe(true);
   });
 });

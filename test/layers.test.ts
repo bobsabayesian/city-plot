@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { layerOf, sceneToSvg } from '../src/export/svg';
-import { buildScene, viewBBox } from '../src/scene/buildScene';
-import { defaultProject } from '../src/scene/project';
-import { sampleTrack, sampleWaypoints } from '../src/sample';
-import { loadTerrain, latToPx, lonToPx, TILE } from '../src/topo/terrain';
+import { buildScene } from '../src/scene/buildScene';
+import { cityProject, cityData } from './fixture';
 import { prepareScene, type FontSet } from '../src/export/outlines';
 import type { PathPrim, Prim, Scene, TextPrim } from '../src/scene/types';
 
@@ -78,18 +76,10 @@ function checkEveryLayerIsOnePen(svg: string) {
 }
 
 describe('a full poster really is one pen per layer', () => {
-  const cone = async (z: number, tx: number, ty: number) => {
-    const cx = lonToPx(-121.7, z);
-    const cy = latToPx(46.82, z);
-    const out = new Float32Array(TILE * TILE);
-    const slope = 2000 / (2 ** z * TILE * 0.0008);
-    for (let r = 0; r < TILE; r++) for (let c = 0; c < TILE; c++) out[r * TILE + c] = Math.max(0, 2000 - slope * Math.hypot(tx * TILE + c - cx, ty * TILE + r - cy));
-    return out;
-  };
-  const rich = async () => {
-    const pts = sampleTrack();
-    const p = { ...defaultProject(), points: pts, waypoints: sampleWaypoints(pts) };
-    p.features.kinds.waypoint = true;
+  const rich = () => {
+    const p = cityProject();
+    for (const k of ['paths', 'rail'] as const) p.layers[k].enabled = true;
+    p.features.kinds.worship = true;
     p.features.waterLabels = true;
     p.north.enabled = true;
     p.north.style = 'rose';
@@ -97,36 +87,27 @@ describe('a full poster really is one pen per layer', () => {
     p.text.title.style = 'outlineFill';
     p.text.title.align = 'justify';
     p.text.title.fillPen = 'blue';
-    p.profile.hatch = 'light';
-    p.terrain.labels.enabled = true;
-    p.terrain.labels.density = 'dense';
-    p.profile.labels = { extremes: true, yTicks: true, xTicks: true, sizePt: 9 };
-    p.text.info.items.find((i) => i.key === 'contour')!.visible = true;
-    const terrain = await loadTerrain(viewBBox(p)!, cone);
-    const osm = {
-      landmarks: [{ id: 'n1', name: 'Little Peak', kind: 'peak' as const, lat: 46.805, lon: -121.69, ele: 2800 }],
-      water: [{ id: 'w1', kind: 'river' as const, name: 'Test River', coords: [[46.79, -121.74], [46.83, -121.66]] as [number, number][] }],
-      covers: { minLat: 46, maxLat: 47, minLon: -122, maxLon: -121 },
-    };
-    return buildScene(p, terrain, osm);
+    p.custom = [{ id: 'custom-1', name: 'Home', kind: 'custom', lat: 47.6062, lon: -122.3321, icon: 'home' }];
+    const d = cityData();
+    d.layers.paths = { covers: d.layers.major!.covers, ways: [{ id: 'p', closed: false, pts: [47.6, -122.34, 47.61, -122.33] }] };
+    d.layers.rail = { covers: d.layers.major!.covers, ways: [{ id: 'r', closed: false, pts: [47.6, -122.33, 47.61, -122.34] }] };
+    return buildScene(p, d);
   };
 
-  it('with every feature switched on, live text', async () => {
-    const sc = await rich();
-    const svg = sceneToSvg(sc);
+  it('with every feature switched on, live text', () => {
+    const svg = sceneToSvg(rich());
     checkEveryLayerIsOnePen(svg);
-    expect(svg.match(/<g id=/g)!.length).toBeGreaterThanOrEqual(5); // route, contours x2, profile, north, water, ...
+    expect(svg.match(/<g id=/g)!.length).toBeGreaterThanOrEqual(7);
   });
-  it('and in plotter mode: strokes only, each layer one pen', async () => {
-    const sc = await rich();
+  it('and in plotter mode: strokes only, each layer one pen', () => {
     const fake = { unitsPerEm: 1000, charToGlyph: () => ({ advanceWidth: 500, getPath: () => ({ toPathData: () => 'M0 0L1 1', commands: [{ type: 'M', x: 0, y: 0 }, { type: 'L', x: 1, y: 1 }] }) }) };
-    const out = sceneToSvg(prepareScene(sc, 'plotter', { sans: fake, serif: fake } as unknown as FontSet));
+    const out = sceneToSvg(prepareScene(rich(), 'plotter', { sans: fake, serif: fake } as unknown as FontSet));
     checkEveryLayerIsOnePen(out);
     expect(out).not.toContain('-fill"');
     expect(out).not.toContain('<text');
   });
-  it('heavy and light contours, route, water and labels land on different layers by width', async () => {
-    const sc = await rich();
+  it('the thick and thin street layers, the border and the water land on different layers by width', () => {
+    const sc = rich();
     const widths = new Set(sc.prims.flatMap((x) => (x.kind === 'path' && x.mode === 'stroke' ? [+(x.widthMm ?? 0.5).toFixed(2)] : [])));
     expect(widths.size).toBeGreaterThanOrEqual(4);
     const ids = layers(sc.prims);

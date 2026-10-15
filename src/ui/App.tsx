@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useStore } from '../store';
-import { parseGpx, parseWaypoints } from '../gpx/parse';
-import { sampleTrack, sampleWaypoints } from '../sample';
+import { clampKm, useStore } from '../store';
+import { saveExport } from '../lookup';
 import { describePoolItem } from '../features/format';
-import { KIND_LABELS, LANDMARK_KINDS, requestCovers, requestIsEmpty, wantedRequest, type Side } from '../features/types';
-import { composeScene, viewBBox, autoValues, featureView, viewSizeKm } from '../scene/buildScene';
-import { computeStats } from '../geo/stats';
-import { covers, loadTerrain, padBBox } from '../topo/terrain';
+import { CUSTOM_ICONS, ICON_LABELS, KIND_LABELS, LANDMARK_KINDS, type CustomIcon, type Side } from '../features/types';
+import { composeScene, autoValues, parseLatLon, viewOf, type CityData } from '../scene/buildScene';
 import { sceneToSvg } from '../export/svg';
 import { pngSize, sceneToPng } from '../export/png';
 import { loadFonts } from '../export/fonts';
-import { SPAN_MAX_KM, SPAN_MIN_KM, wheelSpan } from './wheel';
 import { prepareScene, tipFor, type ExportMode } from '../export/outlines';
-import { summarizePasses } from '../export/offset';
+import { passCount, passWidth, summarizePasses } from '../export/offset';
 import { PenSelect, PensPanel } from './PensPanel';
 import { PagePanel } from './PagePanel';
 import { FEATURE_PEN_LABELS, penFor } from '../scene/pens';
 import type { FeaturePenKey } from '../features/types';
-import { CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Corner, type NorthStyle, type Align, type FontKey, type Placement, type StrokeStyle } from '../scene/project';
+import { inverseMercator, mercator } from '../geo/project';
+import { isAreaLayer, LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_LABELS, LAYER_MAX_KM, type LayerKey } from '../city/types';
+import { REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
 
 const PlaceRow = ({ value, onChange }: { value: Placement; onChange: (v: Placement) => void }) => (
   <Row label="Position">
@@ -31,137 +29,337 @@ const Row = ({ label, children }: { label: string; children: ReactNode }) => (
   <div className="row"><label>{label}</label>{children}</div>
 );
 
-function download(name: string, data: string | Blob, type: string) {
-  const url = URL.createObjectURL(typeof data === 'string' ? new Blob([data], { type }) : data);
+/**
+ * Save a file to the user's disk, and keep a copy in the bucket when there is one, with the project's settings
+ * beside it (same name, .json) so the design can be recreated.
+ */
+function download(name: string, data: string | Blob, type: string, project: Project) {
+  const blob = typeof data === 'string' ? new Blob([data], { type }) : data;
+  void saveExport(name, blob);
+  void saveExport(name.replace(/\.\w+$/, '.json'), new Blob([JSON.stringify(project, null, 1)], { type: 'application/json' }));
+  const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement('a'), { href: url, download: name });
   a.click();
   URL.revokeObjectURL(url);
 }
 
-/** The "Showing <feature>" block: hover it and use the mouse wheel to zoom (wheel up = slider left = closer). */
-function FeatureStatus({ feature, onSpan }: { feature: NonNullable<ReturnType<typeof useStore.getState>['project']['feature']>; onSpan: (km: number | undefined) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [w, h] = viewSizeKm(featureView(feature));
-  const shown = Math.min(SPAN_MAX_KM, Math.max(SPAN_MIN_KM, Math.round(w)));
-  const latest = useRef(shown);
-  latest.current = shown;
+const fmtKm = (km: number) => (km < 1 ? `${Math.round(km * 1000)} m` : `${+km.toFixed(km < 10 ? 2 : 1)} km`);
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    // A non-passive listener is needed so the page doesn't scroll while the wheel is used here.
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY; // lines -> pixels
-      onSpan(wheelSpan(latest.current, delta));
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [onSpan]);
+/** How many passes of the layer's pen a line thickness takes, and how thick that really draws. */
+function Passes({ weightMm, tipMm }: { weightMm: number; tipMm: number }) {
+  const n = passCount(weightMm, tipMm);
+  return <span className="passes" title="Passes of the pen at a 20% overlap">{n} {n === 1 ? 'pass' : 'passes'} = {passWidth(n, tipMm).toFixed(2)} mm</span>;
+}
 
+/** Thickness in mm, with the passes it means for this pen, and − / + to add or remove a pass. */
+function Weight({ value, tipMm, onChange }: { value: number; tipMm: number; onChange: (mm: number) => void }) {
+  const n = passCount(value, tipMm);
   return (
-    <div className="found" ref={ref} title="Scroll the mouse wheel here to zoom: up zooms in, down zooms out">
-      <div>Showing <b>{feature.name}</b>{feature.kind ? ` (${feature.kind})` : ''}</div>
-      <div className="hint">{feature.lat.toFixed(4)}°, {feature.lon.toFixed(4)}° · view about {Math.round(w)} × {Math.round(h)} km · scroll to zoom</div>
-      <Row label="View width">
-        <input type="range" min={SPAN_MIN_KM} max={SPAN_MAX_KM} step={1} value={shown} onChange={(e) => onSpan(+e.target.value)} />
-        <span>{shown} km</span>
-        <button disabled={feature.spanKm === undefined} onClick={() => onSpan(undefined)}>Auto</button>
-      </Row>
-    </div>
+    <>
+      <button title="One pass fewer" disabled={n <= 1} onClick={() => onChange(+passWidth(n - 1, tipMm).toFixed(3))}>−</button>
+      <input type="number" min={0.05} max={5} step={0.01} value={value} onChange={(e) => onChange(Math.max(0.05, +e.target.value || tipMm))} />
+      <button title="One pass more" onClick={() => onChange(+passWidth(n + 1, tipMm).toFixed(3))}>+</button>
+    </>
   );
 }
 
 export function App() {
-  const { project: p, set, terrain, terrainStatus, terrainError, setTerrain, loadPoints, searchResults, searchIndex, chooseResult, osm, osmStatus, osmError, loadOsm, retryOsm, searchFeature, busy, notice } = useStore();
+  const { project: p, set, setRegion, searchResults, searchIndex, choosePlace, searchPlace, ensureData, retryData, addCustom, busy, notice } = useStore();
+  const layerState = useStore((s) => s.layers);
+  const landmarkState = useStore((s) => s.landmarks);
   const [query, setQuery] = useState('');
   const [err, setErr] = useState('');
-  const [over, setOver] = useState(false);
   const [paperInExport, setPaperInExport] = useState(false);
   const [mode, setMode] = useState<ExportMode>('print');
   const [dpi, setDpi] = useState(150);
   const [pngBusy, setPngBusy] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
+  const [custom, setCustom] = useState({ name: '', where: '', icon: 'pin' as CustomIcon });
 
-  const composed = useMemo(() => composeScene(p, terrain, osm), [p, terrain, osm]);
+  const data = useMemo<CityData>(() => ({
+    layers: Object.fromEntries(LAYER_KEYS.flatMap((k) => (layerState[k]?.data ? [[k, layerState[k]!.data!]] : []))),
+    landmarks: landmarkState.data?.landmarks ?? [],
+  }), [layerState, landmarkState.data]);
+  const composed = useMemo(() => composeScene(p, data), [p, data]);
   const scene = composed.scene;
-  // Route and elevation-profile controls only mean something once a GPX track is loaded.
-  const hasTrack = p.points.length > 0;
-  const need = useMemo(() => viewBBox(p), [p]);
-  const auto = useMemo(() => autoValues(p, p.points.length ? computeStats(p.points) : undefined), [p]);
+  const view = composed.view;
+  const auto = useMemo(() => autoValues(p, view), [p, view]);
+  const widest = view ? Math.max(view.widthKm, view.heightKm) : 0;
 
-  // Fetch landmarks/water whenever the visible area, or what we want to show, is not covered by what we have.
-  const want = useMemo(() => wantedRequest(p.features), [p.features.kinds, p.features.water, p.features.waterLabels]);
+  // Fetch whatever the visible area, and the layers switched on, need that is not already here.
+  const need = useMemo(() => viewOf(p)?.bbox, [p]);
+  const needKey = need ? [need.minLat, need.maxLat, need.minLon, need.maxLon].map((v) => v.toFixed(5)).join() : '';
+  const wanted = `${LAYER_KEYS.map((k) => +p.layers[k].enabled).join('')}${+p.features.enabled}`;
   useEffect(() => {
-    if (!p.features.enabled || !need || requestIsEmpty(want)) return;
-    const c = osm?.covers;
-    const inside = c && need.minLat >= c.minLat && need.maxLat <= c.maxLat && need.minLon >= c.minLon && need.maxLon <= c.maxLon;
-    if (inside && requestCovers(osm?.requested, want)) return;
-    const t = setTimeout(() => loadOsm(padBBox(need, 0.05), want), 600);
+    if (!need) return;
+    const t = setTimeout(() => ensureData(need, widest), 500);
     return () => clearTimeout(t);
-  }, [need, p.features.enabled, osm, want, loadOsm]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needKey, widest, wanted, layerState, landmarkState.status]);
 
-  // Fetch terrain whenever the visible map area is not covered by what we already have.
-  useEffect(() => {
-    if (!p.terrain.enabled || !need) return;
-    if (terrain && covers(terrain, need)) return;
-    let live = true;
-    const t = setTimeout(() => {
-      useStore.setState({ terrainStatus: 'loading' });
-      loadTerrain(padBBox(need, 0.1))
-        .then((field) => live && setTerrain(field, 'idle'))
-        .catch((e) => live && setTerrain(undefined, 'error', e instanceof Error ? e.message : 'Terrain failed'));
-    }, 300);
-    return () => { live = false; clearTimeout(t); };
-  }, [need, p.terrain.enabled, terrain, setTerrain]);
-  // Which line weights in this design become several passes with the chosen pen (plotter export).
+  // Which line weights in this design become several passes with their pens (plotter export).
   const passes = useMemo(() => summarizePasses(scene.prims, (x) => tipFor(x as { pen?: string }, { pens: p.pens })), [scene, p.pens]);
   const previewSvg = useMemo(() => sceneToSvg(scene, { paper: true }), [scene]);
 
-  async function load(file?: File) {
-    if (!file) return;
-    try {
-      const xml = await file.text();
-      loadPoints(parseGpx(xml), true, parseWaypoints(xml));
-      setErr('');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Could not read file');
-    }
-  }
+  // ---- the map in the preview: drag to move, scroll to zoom
+  const sheet = useRef<HTMLDivElement>(null);
+  const live = useRef({ view, region: p.region, scene });
+  live.current = { view, region: p.region, scene };
+  useEffect(() => {
+    const el = sheet.current;
+    if (!el) return;
+    /** pointer position as poster mm, if it is over the map */
+    const toMm = (e: { clientX: number; clientY: number }) => {
+      const svg = el.querySelector('svg');
+      const { view: v, scene: sc } = live.current;
+      if (!svg || !v) return undefined;
+      const r = svg.getBoundingClientRect();
+      const k = sc.widthMm / r.width;
+      return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k, k, v };
+    };
+    const inFrame = (m: NonNullable<ReturnType<typeof toMm>>) => m.x >= m.v.frame.x && m.x <= m.v.frame.x + m.v.frame.w && m.y >= m.v.frame.y && m.y <= m.v.frame.y + m.v.frame.h;
+    const onWheel = (e: WheelEvent) => {
+      const m = toMm(e);
+      const region = live.current.region;
+      if (!m || !region) return;
+      e.preventDefault();
+      const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      const widthKm = clampKm(region.widthKm * Math.exp(delta * 0.0015));
+      // keep the point under the cursor where it is
+      let { lat, lon } = region;
+      if (inFrame(m)) {
+        const [cl, co] = m.v.fit.fromMm(m.x, m.y);
+        const [px, py] = mercator(cl, co);
+        const [rx, ry] = mercator(region.lat, region.lon);
+        const k = widthKm / region.widthKm;
+        [lat, lon] = inverseMercator(px + (rx - px) * k, py + (ry - py) * k);
+      }
+      useStore.getState().setRegion({ lat, lon, widthKm });
+    };
+    let drag: { x: number; y: number; lat: number; lon: number; k: number; merc: number } | undefined;
+    let raf = 0;
+    const onDown = (e: PointerEvent) => {
+      const m = toMm(e);
+      const region = live.current.region;
+      if (!m || !region || !inFrame(m)) return;
+      el.setPointerCapture(e.pointerId);
+      drag = { x: e.clientX, y: e.clientY, lat: region.lat, lon: region.lon, k: m.k, merc: m.v.fit.metersPerMm };
+      el.classList.add('dragging');
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!drag) return;
+      const d = drag;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        // the map follows the pointer: dragging right moves the center left
+        const [cx, cy] = mercator(d.lat, d.lon);
+        const [lat, lon] = inverseMercator(cx - (e.clientX - d.x) * d.k * d.merc, cy + (e.clientY - d.y) * d.k * d.merc);
+        useStore.getState().setRegion({ lat, lon });
+      });
+    };
+    const onUp = () => { drag = undefined; el.classList.remove('dragging'); };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('pointerdown', onDown);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+    };
+  }, []);
+
+  const region = p.region;
+  const fileBase = `city-plot-${(p.place?.name ?? 'map').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'map'}`;
+  const status = (key: LayerKey): ReactNode => {
+    const st = layerState[key];
+    if (widest > LAYER_MAX_KM[key]) return <span className="hint">Too wide: shown at {LAYER_MAX_KM[key]} km or less across. Zoom in.</span>;
+    if (st?.status === 'loading') return <span className="hint">Loading…</span>;
+    if (st?.status === 'error') return <span className="err">{st.error} <button onClick={retryData}>Retry</button></span>;
+    if (st?.data?.truncated) return <span className="hint">Very dense: the map server cut this layer short. Zoom in for all of it.</span>;
+    return null;
+  };
 
   return (
     <div className="app">
       <aside className="panel">
-        <h1>WALK OF FRAME</h1>
-        <div
-          className={`drop${over ? ' over' : ''}`}
-          onClick={() => input.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setOver(true); }}
-          onDragLeave={() => setOver(false)}
-          onDrop={(e) => { e.preventDefault(); setOver(false); load(e.dataTransfer.files[0]); }}
-        >
-          Drop a .gpx file here, or click to browse
-          <input ref={input} type="file" accept=".gpx" hidden onChange={(e) => load(e.target.files?.[0])} />
-        </div>
-        <div className="row"><button onClick={() => { const t = sampleTrack(); loadPoints(t, false, sampleWaypoints(t)); }}>Use sample route</button></div>
-        {err && <div className="err">{err}</div>}
-        <h2>Or search a feature</h2>
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (query.trim()) searchFeature(query.trim()); }}>
-          <input type="text" placeholder="e.g. Mount Rainier" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <h1>CITY PLOT</h1>
+        <h2>Place</h2>
+        <form className="row" onSubmit={(e) => { e.preventDefault(); if (query.trim()) searchPlace(query.trim()); }}>
+          <input type="text" placeholder="City, landmark, address, or lat, lon" value={query} onChange={(e) => setQuery(e.target.value)} />
           <button disabled={!!busy}>{busy || 'Go'}</button>
         </form>
         {notice && <div className="err">{notice}</div>}
         {searchResults.length > 0 && (
           <div className="results">
             {searchResults.map((r, i) => (
-              <button key={`${r.lat},${r.lon},${i}`} className={i === searchIndex && p.feature ? 'res sel' : 'res'} onClick={() => chooseResult(i)}>
+              <button key={`${r.lat},${r.lon},${i}`} className={i === searchIndex && p.place ? 'res sel' : 'res'} onClick={() => choosePlace(i)}>
                 <b>{r.name}</b>
                 <span>{[r.kind, r.location].filter(Boolean).join(' · ')}</span>
               </button>
             ))}
           </div>
         )}
-        {p.feature && <FeatureStatus feature={p.feature} onSpan={(km) => set((x) => { x.feature!.spanKm = km; })} />}
+        {!p.place && <div className="hint">Search for a city or a landmark to start. You can then move the map and set how much ground it covers.</div>}
+
+        {region && view && (<>
+          <h2>Region</h2>
+          <div className="hint">Drag the map to move it. Scroll over it to zoom. The area follows the page shape, so a taller page shows more north to south.</div>
+          <Row label="Width">
+            <input type="range" min={Math.log(REGION_MIN_KM)} max={Math.log(REGION_MAX_KM)} step={0.01} value={Math.log(region.widthKm)} onChange={(e) => setRegion({ widthKm: +Math.exp(+e.target.value).toFixed(3) })} />
+            <span>{fmtKm(region.widthKm)}</span>
+          </Row>
+          <Row label="Center">
+            <input type="number" step={0.001} title="Latitude" value={+region.lat.toFixed(5)} onChange={(e) => setRegion({ lat: +e.target.value || 0 })} />
+            <input type="number" step={0.001} title="Longitude" value={+region.lon.toFixed(5)} onChange={(e) => setRegion({ lon: +e.target.value || 0 })} />
+          </Row>
+          <div className="hint">Covers {fmtKm(view.widthKm)} × {fmtKm(view.heightKm)} · scale 1:{view.scale.toLocaleString('en-US')}</div>
+          {p.place && <div className="row"><button onClick={() => { const pl = p.place!; setRegion({ lat: pl.lat, lon: pl.lon }); }}>Center on {p.place.name}</button></div>}
+        </>)}
+
+        <PensPanel project={p} scene={scene} />
+
+        <h2>Map layers</h2>
+        <div className="hint">Each layer is drawn with one of your pens. A line is drawn as passes of the pen side by side, overlapping by 20%, so its thickness is whole passes: a 0.3 mm pen draws 0.3, 0.54, 0.78, 1.02 mm… Anything thinner than the pen is one pass.</div>
+        {[...LAYER_KEYS].reverse().map((key) => {
+          const st = p.layers[key];
+          const pen = penFor(p.pens, st.pen);
+          return (
+            <div className="field" key={key}>
+              <Row label={LAYER_LABELS[key]}>
+                <input type="checkbox" checked={st.enabled} onChange={(e) => set((x) => { x.layers[key].enabled = e.target.checked; })} />
+                {st.enabled && <Passes weightMm={st.weightMm} tipMm={pen.tipMm} />}
+              </Row>
+              {st.enabled && (<>
+                <Row label="Pen"><PenSelect pens={p.pens} value={st.pen} onChange={(id) => set((x) => { x.layers[key].pen = id!; })} /></Row>
+                <Row label="Thickness"><Weight value={st.weightMm} tipMm={pen.tipMm} onChange={(mm) => set((x) => { x.layers[key].weightMm = mm; })} /><span className="unit">mm</span></Row>
+                <Row label="Line">
+                  <select value={st.style} onChange={(e) => set((x) => { x.layers[key].style = e.target.value as typeof st.style; })}>
+                    <option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option>
+                  </select>
+                </Row>
+                {isAreaLayer(key) && (
+                  <Row label="Fill">
+                    <select value={st.fill} onChange={(e) => set((x) => { x.layers[key].fill = e.target.value as typeof st.fill; })}>
+                      <option value="off">Outline only</option><option value="light">Light hatching</option><option value="medium">Medium hatching</option><option value="solid">Solid hatching</option>
+                    </select>
+                  </Row>
+                )}
+              </>)}
+              {st.enabled && status(key)}
+            </div>
+          );
+        })}
+
+        <h2>Landmarks</h2>
+        <Row label="Show">
+          <input type="checkbox" checked={p.features.enabled} onChange={(e) => set((x) => { x.features.enabled = e.target.checked; })} />
+          <span>{landmarkState.status === 'loading' ? 'Loading landmarks…' : ''}</span>
+        </Row>
+        {landmarkState.status === 'error' && <div className="err">{landmarkState.error} <button onClick={retryData}>Retry</button></div>}
+        {p.features.enabled && widest > LANDMARKS_MAX_KM && <div className="hint">Landmarks are found for views up to {LANDMARKS_MAX_KM} km across; your own are always shown.</div>}
+        {p.features.enabled && widest > 8 && widest <= LANDMARKS_MAX_KM && <div className="hint">At this width only landmarks linked to Wikipedia/Wikidata are listed; zoom in for more.</div>}
+        {p.features.enabled && (<>
+          <Row label="Max labels"><input type="range" min={0} max={40} step={1} value={p.features.maxLabels} onChange={(e) => set((x) => { x.features.maxLabels = +e.target.value; })} /><span>{p.features.maxLabels}</span></Row>
+          <div className="kinds">
+            {LANDMARK_KINDS.filter((k) => k !== 'custom').map((k) => (
+              <label key={k}><input type="checkbox" checked={p.features.kinds[k]} onChange={(e) => set((x) => { x.features.kinds[k] = e.target.checked; })} /> {KIND_LABELS[k]}</label>
+            ))}
+            <label title="Write river and lake names"><input type="checkbox" checked={p.features.waterLabels} onChange={(e) => set((x) => { x.features.waterLabels = e.target.checked; })} /> Water names</label>
+          </div>
+          {p.features.waterLabels && <Row label="Max water names"><input type="range" min={0} max={10} step={1} value={p.features.maxWaterLabels} onChange={(e) => set((x) => { x.features.maxWaterLabels = +e.target.value; })} /><span>{p.features.maxWaterLabels}</span></Row>}
+          <Row label="Size (pt)"><input type="number" min={6} max={60} value={p.features.sizePt} onChange={(e) => set((x) => { x.features.sizePt = +e.target.value || 11; })} /></Row>
+          <Row label="Pen"><PenSelect pens={p.pens} value={p.features.pens.default} onChange={(id) => set((x) => { x.features.pens.default = id!; })} /></Row>
+          <details className="overrides">
+            <summary>Pen for each kind</summary>
+            {(Object.keys(FEATURE_PEN_LABELS) as FeaturePenKey[]).map((k) => (
+              <Row key={k} label={FEATURE_PEN_LABELS[k]}>
+                <PenSelect
+                  pens={p.pens}
+                  value={p.features.pens.overrides[k]}
+                  allowDefault={`Same as landmarks (${penFor(p.pens, p.features.pens.default).name})`}
+                  onChange={(id) => set((x) => { if (id === undefined) delete x.features.pens.overrides[k]; else x.features.pens.overrides[k] = id; })}
+                />
+              </Row>
+            ))}
+          </details>
+          {composed.landmarks?.filter((l) => l.kind !== 'custom').map((l) => {
+            const ov = p.features.overrides[l.id] ?? {};
+            const edit = (patch: Partial<typeof ov>) => set((x) => { x.features.overrides[l.id] = { ...x.features.overrides[l.id], ...patch }; });
+            return (
+              <div className="lm" key={l.id}>
+                <input type="checkbox" title="Show" checked={!l.hidden} onChange={(e) => edit({ hidden: !e.target.checked })} />
+                <input type="text" title={KIND_LABELS[l.kind]} value={ov.name ?? l.name} onChange={(e) => edit({ name: e.target.value })} />
+                <select title="Label side" value={ov.side ?? 'auto'} disabled={l.kind === 'lake' || l.kind === 'river'} onChange={(e) => edit({ side: e.target.value as Side })}>
+                  <option value="auto">Auto</option><option value="right">Right</option><option value="left">Left</option>
+                  <option value="above">Above</option><option value="below">Below</option>
+                </select>
+                {!l.placed && !l.hidden && <span className="hint" title="No room for this label">no room</span>}
+              </div>
+            );
+          })}
+          {(['point', 'water'] as const).map((group) => {
+            const open = composed.open?.[group] ?? 0;
+            const items = (composed.pool ?? []).filter((it) => it.group === group && it.kind !== 'custom');
+            if (open <= 0 || (group === 'water' && !p.features.waterLabels)) return null;
+            const noun = group === 'water' ? 'water name' : 'landmark';
+            return (
+              <div className="slot" key={group}>
+                <div className="hint">
+                  {open} open {noun} slot{open > 1 ? 's' : ''}. {items.length ? 'Choose what to add:' : `No other ${noun}s nearby.`}
+                </div>
+                {items.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = e.target.value;
+                      if (id) set((x) => { x.features.overrides[id] = { ...x.features.overrides[id], pinned: true, hidden: false }; });
+                    }}
+                  >
+                    <option value="">Add {noun}…</option>
+                    {items.map((it) => <option key={it.id} value={it.id}>{describePoolItem(it)}</option>)}
+                  </select>
+                )}
+              </div>
+            );
+          })}
+        </>)}
+
+        <h3>My landmarks</h3>
+        <div className="hint">Mark your own places, like home. Give an address (or a place name) or latitude, longitude.</div>
+        <form className="field" onSubmit={async (e) => {
+          e.preventDefault();
+          if (!custom.where.trim()) return;
+          if (await addCustom(custom.name, custom.where.trim(), custom.icon)) setCustom({ ...custom, name: '', where: '' });
+        }}>
+          <Row label="Name"><input type="text" placeholder="Home" value={custom.name} onChange={(e) => setCustom({ ...custom, name: e.target.value })} /></Row>
+          <Row label="Where"><input type="text" placeholder="123 Main St, Seattle  or  47.62, -122.35" value={custom.where} onChange={(e) => setCustom({ ...custom, where: e.target.value })} /></Row>
+          <Row label="Marker">
+            <select value={custom.icon} onChange={(e) => setCustom({ ...custom, icon: e.target.value as CustomIcon })}>
+              {CUSTOM_ICONS.map((i) => <option key={i} value={i}>{ICON_LABELS[i]}</option>)}
+            </select>
+            <button disabled={!!busy || !custom.where.trim()}>Add</button>
+          </Row>
+        </form>
+        {p.custom.map((c, i) => {
+          const placed = composed.landmarks?.some((l) => l.id === c.id && l.placed);
+          return (
+            <div className="field" key={c.id}>
+              <Row label="Name"><input type="text" value={c.name} onChange={(e) => set((x) => { x.custom[i]!.name = e.target.value; })} />
+                <button title="Remove" onClick={() => set((x) => { x.custom.splice(i, 1); })}>×</button></Row>
+              <Row label="Marker">
+                <select value={c.icon ?? 'pin'} onChange={(e) => set((x) => { x.custom[i]!.icon = e.target.value as CustomIcon; })}>
+                  {CUSTOM_ICONS.map((k) => <option key={k} value={k}>{ICON_LABELS[k]}</option>)}
+                </select>
+                <button title="Move the map here" onClick={() => setRegion({ lat: c.lat, lon: c.lon })}>Center</button>
+              </Row>
+              <div className="hint">{c.lat.toFixed(5)}, {c.lon.toFixed(5)}{region && !placed ? ' · outside the map, or no room for its label' : ''}</div>
+            </div>
+          );
+        })}
 
         <h2>Print size</h2>
         <Row label="Size">
@@ -199,164 +397,6 @@ export function App() {
         </Row>
 
         <PagePanel project={p} />
-
-        <PensPanel project={p} scene={scene} />
-
-        {hasTrack && (<>
-        <h2>Route</h2>
-        <Row label="Pen"><PenSelect pens={p.pens} value={p.route.pen} onChange={(id) => set((x) => { x.route.pen = id!; })} /></Row>
-        <Row label="Weight">
-          <input type="range" min={0.2} max={3} step={0.1} value={p.route.weightMm} onChange={(e) => set((x) => { x.route.weightMm = +e.target.value; })} />
-          <span>{p.route.weightMm.toFixed(1)} mm</span>
-        </Row>
-        <Row label="Style">
-          <select value={p.route.style} onChange={(e) => set((x) => { x.route.style = e.target.value as StrokeStyle; })}>
-            <option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option>
-          </select>
-        </Row>
-        </>)}
-
-        <h2>Contours</h2>
-        <Row label="Show"><input type="checkbox" checked={p.terrain.enabled} onChange={(e) => set((x) => { x.terrain.enabled = e.target.checked; })} />
-          <span>{terrainStatus === 'loading' ? 'Loading terrain…' : ''}</span></Row>
-        {terrainError && <div className="err">{terrainError}</div>}
-        {p.terrain.enabled && (<>
-          <Row label="Interval">
-            <select value={p.terrain.intervalM} onChange={(e) => set((x) => { x.terrain.intervalM = +e.target.value; })}>
-              <option value={0}>Auto</option>
-              {[10, 20, 25, 50, 100, 200, 500].map((n) => <option key={n} value={n}>{n} m</option>)}
-            </select>
-          </Row>
-          <Row label="Heavy every">
-            <select value={p.terrain.indexEvery} onChange={(e) => set((x) => { x.terrain.indexEvery = +e.target.value; })}>
-              <option value={0}>None</option>
-              {[4, 5, 10].map((n) => <option key={n} value={n}>{n}th line</option>)}
-            </select>
-          </Row>
-          <Row label="Pen"><PenSelect pens={p.pens} value={p.terrain.pen} onChange={(id) => set((x) => { x.terrain.pen = id!; })} /></Row>
-          <Row label="Weight"><input type="range" min={0.05} max={0.6} step={0.01} value={p.terrain.weightMm} onChange={(e) => set((x) => { x.terrain.weightMm = +e.target.value; x.terrain.indexWeightMm = +e.target.value * 2; })} /></Row>
-          <Row label="Opacity"><input type="range" min={0.1} max={1} step={0.05} value={p.terrain.opacity} onChange={(e) => set((x) => { x.terrain.opacity = +e.target.value; })} /></Row>
-          {p.terrain.indexEvery > 0 && (<>
-            <Row label="Number heavy lines"><input type="checkbox" checked={p.terrain.labels.enabled} onChange={(e) => set((x) => { x.terrain.labels.enabled = e.target.checked; })} /><span>elevation along the line</span></Row>
-            {p.terrain.labels.enabled && (<>
-              <Row label="How many">
-                <select value={p.terrain.labels.density} onChange={(e) => set((x) => { x.terrain.labels.density = e.target.value as typeof p.terrain.labels.density; })}>
-                  <option value="sparse">Few per line</option><option value="normal">Some per line</option><option value="dense">Many per line</option>
-                </select>
-              </Row>
-              <Row label="Which lines">
-                <select value={p.terrain.labels.every} onChange={(e) => set((x) => { x.terrain.labels.every = +e.target.value; })}>
-                  <option value={1}>Every heavy line</option><option value={2}>Every 2nd heavy line</option><option value={3}>Every 3rd heavy line</option>
-                </select>
-              </Row>
-              <Row label="Break the line"><input type="checkbox" checked={p.terrain.labels.gap} onChange={(e) => set((x) => { x.terrain.labels.gap = e.target.checked; })} /><span>gap behind each number</span></Row>
-              <Row label="Number size"><input type="number" min={5} max={30} value={p.terrain.labels.sizePt} onChange={(e) => set((x) => { x.terrain.labels.sizePt = +e.target.value || 8; })} /></Row>
-            </>)}
-          </>)}
-        </>)}
-
-        <h2>Landmarks</h2>
-        <Row label="Show">
-          <input type="checkbox" checked={p.features.enabled} onChange={(e) => set((x) => { x.features.enabled = e.target.checked; })} />
-          <span>{osmStatus === 'loading' ? 'Loading landmarks…' : ''}</span>
-        </Row>
-        {osmError && <div className="err">{osmError} <button onClick={retryOsm}>Retry</button></div>}
-        {osm?.partial?.length ? (
-          <div className="hint">
-            {osm.partial.includes('water') ? 'Rivers and lakes are unavailable for this area right now' : 'Some landmarks are unavailable right now'}
-            {' '}(OpenStreetMap servers are busy or the area is large). <button onClick={retryOsm}>Retry</button>
-            {osm.reason && <div title={osm.reason}>Details: {osm.reason}</div>}
-          </div>
-        ) : null}
-        {p.features.enabled && (<>
-          <Row label="Max points"><input type="range" min={0} max={20} step={1} value={p.features.maxLabels} onChange={(e) => set((x) => { x.features.maxLabels = +e.target.value; })} /><span>{p.features.maxLabels}</span></Row>
-          <Row label="Max water names"><input type="range" min={0} max={10} step={1} value={p.features.maxWaterLabels} onChange={(e) => set((x) => { x.features.maxWaterLabels = +e.target.value; })} /><span>{p.features.maxWaterLabels}</span></Row>
-          <div className="kinds">
-            {LANDMARK_KINDS.map((k) => (
-              <label key={k}><input type="checkbox" checked={p.features.kinds[k]} onChange={(e) => set((x) => { x.features.kinds[k] = e.target.checked; })} /> {KIND_LABELS[k]}</label>
-            ))}
-            <label title="Draw rivers and lake shapes"><input type="checkbox" checked={p.features.water} onChange={(e) => set((x) => { x.features.water = e.target.checked; })} /> Water outlines</label>
-            <label title="Write river and lake names"><input type="checkbox" checked={p.features.waterLabels} onChange={(e) => set((x) => { x.features.waterLabels = e.target.checked; })} /> Water labels</label>
-          </div>
-          <Row label="Size (pt)"><input type="number" min={6} max={60} value={p.features.sizePt} onChange={(e) => set((x) => { x.features.sizePt = +e.target.value || 11; })} /></Row>
-          <Row label="Pen"><PenSelect pens={p.pens} value={p.features.pens.default} onChange={(id) => set((x) => { x.features.pens.default = id!; })} /></Row>
-          <details className="overrides">
-            <summary>Pen for each kind</summary>
-            {(Object.keys(FEATURE_PEN_LABELS) as FeaturePenKey[]).map((k) => (
-              <Row key={k} label={FEATURE_PEN_LABELS[k]}>
-                <PenSelect
-                  pens={p.pens}
-                  value={p.features.pens.overrides[k]}
-                  allowDefault={`Same as landmarks (${penFor(p.pens, p.features.pens.default).name})`}
-                  onChange={(id) => set((x) => { if (id === undefined) delete x.features.pens.overrides[k]; else x.features.pens.overrides[k] = id; })}
-                />
-              </Row>
-            ))}
-          </details>
-          {composed.landmarks?.map((l) => {
-            const ov = p.features.overrides[l.id] ?? {};
-            const edit = (patch: Partial<typeof ov>) => set((x) => { x.features.overrides[l.id] = { ...x.features.overrides[l.id], ...patch }; });
-            return (
-              <div className="lm" key={l.id}>
-                <input type="checkbox" title="Show" checked={!l.hidden} onChange={(e) => edit({ hidden: !e.target.checked })} />
-                <input type="text" title={KIND_LABELS[l.kind]} value={ov.name ?? l.name} onChange={(e) => edit({ name: e.target.value })} />
-                <select title="Label side" value={ov.side ?? 'auto'} disabled={l.kind === 'lake' || l.kind === 'river'} onChange={(e) => edit({ side: e.target.value as Side })}>
-                  <option value="auto">Auto</option><option value="right">Right</option><option value="left">Left</option>
-                  <option value="above">Above</option><option value="below">Below</option>
-                </select>
-                {!l.placed && !l.hidden && <span className="hint" title="No room for this label">no room</span>}
-              </div>
-            );
-          })}
-          {(['point', 'water'] as const).map((group) => {
-            const open = composed.open?.[group] ?? 0;
-            const items = (composed.pool ?? []).filter((it) => it.group === group);
-            if (open <= 0 || (group === 'water' && !p.features.waterLabels)) return null;
-            const noun = group === 'water' ? 'water name' : 'landmark';
-            return (
-              <div className="slot" key={group}>
-                <div className="hint">
-                  {open} open {noun} slot{open > 1 ? 's' : ''}. {items.length ? 'Choose what to add:' : `No other ${noun}s nearby.`}
-                </div>
-                {items.length > 0 && (
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const id = e.target.value;
-                      if (id) set((x) => { x.features.overrides[id] = { ...x.features.overrides[id], pinned: true, hidden: false }; });
-                    }}
-                  >
-                    <option value="">Add {noun}…</option>
-                    {items.map((it) => <option key={it.id} value={it.id}>{describePoolItem(it, p.units)}</option>)}
-                  </select>
-                )}
-              </div>
-            );
-          })}
-        </>)}
-
-        {hasTrack && (<>
-        <h2>Elevation profile</h2>
-        <Row label="Show"><input type="checkbox" checked={p.profile.enabled} onChange={(e) => set((x) => { x.profile.enabled = e.target.checked; })} /></Row>
-        {p.profile.enabled && (<>
-          <Row label="Position">
-            <select value={p.profile.position} onChange={(e) => set((x) => { x.profile.position = e.target.value as typeof p.profile.position; })}>
-              <option value="bottom">Bottom</option><option value="corner">Bottom corner</option>
-            </select>
-          </Row>
-          <Row label="Pen"><PenSelect pens={p.pens} value={p.profile.pen} onChange={(id) => set((x) => { x.profile.pen = id!; })} /></Row>
-          <Row label="Fill (plotter)">
-            <select value={p.profile.hatch} onChange={(e) => set((x) => { x.profile.hatch = e.target.value as typeof p.profile.hatch; })}>
-              <option value="off">Outline only</option><option value="light">Light hatching</option><option value="medium">Medium hatching</option><option value="solid">Solid hatching</option>
-            </select>
-          </Row>
-          <Row label="Opacity"><input type="range" min={0} max={1} step={0.02} value={p.profile.opacity} onChange={(e) => set((x) => { x.profile.opacity = +e.target.value; })} /></Row>
-                  <Row label="Label peaks"><input type="checkbox" checked={p.profile.labels.extremes} onChange={(e) => set((x) => { x.profile.labels.extremes = e.target.checked; })} /><span>highest and lowest point</span></Row>
-          <Row label="Elevation ticks"><input type="checkbox" checked={p.profile.labels.yTicks} onChange={(e) => set((x) => { x.profile.labels.yTicks = e.target.checked; })} /></Row>
-          <Row label="Distance ticks"><input type="checkbox" checked={p.profile.labels.xTicks} onChange={(e) => set((x) => { x.profile.labels.xTicks = e.target.checked; })} /></Row>
-          <Row label="Label size"><input type="number" min={5} max={30} value={p.profile.labels.sizePt} onChange={(e) => set((x) => { x.profile.labels.sizePt = +e.target.value || 9; })} /></Row>
-        </>)}
-        </>)}
 
         <h2>North arrow</h2>
         <Row label="Show"><input type="checkbox" checked={p.north.enabled} onChange={(e) => set((x) => { x.north.enabled = e.target.checked; })} /></Row>
@@ -435,7 +475,7 @@ export function App() {
           <PlaceRow value={p.text.location.placement} onChange={(v) => set((x) => { x.text.location.placement = v; })} />
         </div>
 
-        <h3>Route info</h3>
+        <h3>Map info</h3>
         <div className="field">
           <Row label="Show"><input type="checkbox" checked={p.text.info.visible} onChange={(e) => set((x) => { x.text.info.visible = e.target.checked; })} /></Row>
           <Row label="Layout">
@@ -481,7 +521,7 @@ export function App() {
           <button className="primary" onClick={async () => {
             try {
               const out = prepareScene(scene, mode, mode === 'live' ? undefined : await loadFonts(), { pens: p.pens });
-              download('hike-poster.svg', sceneToSvg(out, { paper: paperInExport && mode !== 'plotter' }), 'image/svg+xml');
+              download(`${fileBase}.svg`, sceneToSvg(out, { paper: paperInExport && mode !== 'plotter' }), 'image/svg+xml', p);
             } catch (e) {
               setErr(e instanceof Error ? e.message : 'SVG export failed');
             }
@@ -499,7 +539,7 @@ export function App() {
               setPngBusy(true);
               try {
                 const { blob } = await sceneToPng(scene, dpi);
-                download('hike-poster.png', blob, 'image/png');
+                download(`${fileBase}.png`, blob, 'image/png', p);
               } catch (e) {
                 setErr(e instanceof Error ? e.message : 'PNG export failed');
               } finally {
@@ -516,7 +556,7 @@ export function App() {
         })()}
       </aside>
       <main className="stage">
-        <div className="sheet" dangerouslySetInnerHTML={{ __html: previewSvg }} />
+        <div className="sheet" ref={sheet} style={{ cursor: region ? 'grab' : undefined }} dangerouslySetInnerHTML={{ __html: previewSvg }} />
       </main>
     </div>
   );

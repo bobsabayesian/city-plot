@@ -1,8 +1,7 @@
-import { bbox, haversine, type BBox } from './geo/project';
-import type { TrackPoint } from './gpx/types';
-import type { Feature } from './scene/project';
-import { computeStats } from './geo/stats';
-import type { OsmData, OsmRequest } from './features/types';
+import type { BBox } from './geo/project';
+import type { Place } from './scene/project';
+import type { LandmarkData } from './features/types';
+import type { LayerData, LayerKey } from './city/types';
 
 async function api<T>(path: string): Promise<T> {
   const r = await fetch(path);
@@ -10,45 +9,48 @@ async function api<T>(path: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-export interface GeocodeHit extends Feature { location: string; kind: string }
+export interface GeocodeHit extends Place { location: string; kind: string; bbox: NonNullable<Place['bbox']> }
 
-/** Up to six candidate matches for a typed place or feature name, best first. */
-export async function geocodeFeature(q: string): Promise<GeocodeHit[]> {
+/** Up to six candidate matches for a typed place, landmark or address, best first. */
+export async function geocode(q: string): Promise<GeocodeHit[]> {
   return (await api<{ results: GeocodeHit[] }>(`/api/geocode?q=${encodeURIComponent(q)}`)).results;
 }
 
-/** Region name (e.g. "Pierce County, Washington") near the track's high point. */
-export async function reverseLocation(pts: TrackPoint[]): Promise<string | undefined> {
-  const at = computeStats(pts).peak ?? pts[0]!;
-  return (await api<{ location: string }>(`/api/reverse?lat=${at.lat}&lon=${at.lon}`)).location || undefined;
+/** Region name (e.g. "Seattle, Washington") for a point. */
+export async function reverseLocation(lat: number, lon: number): Promise<string | undefined> {
+  return (await api<{ location: string }>(`/api/reverse?lat=${lat}&lon=${lon}`)).location || undefined;
 }
 
-/** Named OSM peak closest to the track's high point, if one is within `maxM`. */
-export async function nearestPeakName(pts: TrackPoint[], maxM = 1500): Promise<string | undefined> {
-  const high = computeStats(pts).peak;
-  if (!high) return undefined;
-  const b: BBox = bbox([high]);
-  const pad = 0.02;
-  const qs = new URLSearchParams({
-    minLat: String(b.minLat - pad), maxLat: String(b.maxLat + pad),
-    minLon: String(b.minLon - pad), maxLon: String(b.maxLon + pad),
-  });
-  const { peaks } = await api<{ peaks: { name: string; lat: number; lon: number }[] }>(`/api/peaks?${qs}`);
-  let best: { name: string; d: number } | undefined;
-  for (const pk of peaks) {
-    const d = haversine(high.lat, high.lon, pk.lat, pk.lon);
-    if (d <= maxM && (!best || d < best.d)) best = { name: pk.name, d };
+const boxParams = (b: BBox) => ({ minLat: String(b.minLat), maxLat: String(b.maxLat), minLon: String(b.minLon), maxLon: String(b.maxLon) });
+
+/** One map layer's ways inside `b`. The server rounds the area outward; `covers` is what the answer is complete for. */
+export function fetchLayer(layer: LayerKey, b: BBox): Promise<LayerData> {
+  return api<LayerData>(`/api/layer?${new URLSearchParams({ layer, ...boxParams(b) })}`);
+}
+
+/** Named landmarks inside `b`; `notableOnly` asks only for ones linked to Wikidata (for wide views). */
+export async function fetchLandmarks(b: BBox, notableOnly: boolean): Promise<LandmarkData> {
+  const d = await api<Pick<LandmarkData, 'landmarks' | 'covers'>>(`/api/landmarks?${new URLSearchParams({ ...boxParams(b), notable: notableOnly ? '1' : '0' })}`);
+  return { ...d, notableOnly };
+}
+
+let session: string | undefined;
+/** An id for this browser session, so everything saved from it lands in one folder. Kept for the tab's lifetime. */
+export function sessionId(): string {
+  if (session) return session;
+  try { session = sessionStorage.getItem('city-plot-session') ?? undefined; } catch { /* storage blocked */ }
+  if (!session) {
+    session = crypto.randomUUID();
+    try { sessionStorage.setItem('city-plot-session', session); } catch { /* storage blocked */ }
   }
-  return best?.name;
+  return session;
 }
 
-/** Named landmarks and water lines inside `b` (at most ~1 degree across). */
-export async function fetchFeatures(b: BBox, req: OsmRequest): Promise<OsmData> {
-  const qs = new URLSearchParams({
-    minLat: String(b.minLat), maxLat: String(b.maxLat), minLon: String(b.minLon), maxLon: String(b.maxLon),
-    kinds: req.kinds.join(','), lakes: req.lakes ? '1' : '0', rivers: req.rivers ? '1' : '0',
-  });
-  const d = await api<Pick<OsmData, 'landmarks' | 'water' | 'partial' | 'reason'> & { covers?: BBox }>(`/api/features?${qs}`);
-  // The server rounds the area outward; what it really covers is what we may reuse without another fetch.
-  return { ...d, covers: d.covers ?? b, requested: req };
+/** Keep a copy of an export in the project's storage bucket. Resolves to false when there is none (local dev) or it failed. */
+export async function saveExport(name: string, data: Blob): Promise<boolean> {
+  try {
+    return (await fetch(`/api/export?${new URLSearchParams({ name, session: sessionId() })}`, { method: 'POST', body: data })).ok;
+  } catch {
+    return false;
+  }
 }

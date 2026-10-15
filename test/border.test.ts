@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BORDER_CLEARANCE_MM, borderPrims, defaultBorder, layoutBorder, type BorderSettings } from '../src/scene/border';
 import { defaultProject, posterMm, type Project } from '../src/scene/project';
-import { buildScene, composeScene } from '../src/scene/buildScene';
+import { buildScene, composeScene, viewOf } from '../src/scene/buildScene';
 import { prepareScene, type FontSet } from '../src/export/outlines';
 import { sceneToSvg } from '../src/export/svg';
 import { penUsage } from '../src/scene/pens';
-import { sampleTrack, sampleWaypoints } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 import type { PathPrim } from '../src/scene/types';
 
 const fake = { unitsPerEm: 1000, charToGlyph: () => ({ advanceWidth: 500, getPath: () => ({ toPathData: () => 'M0 0L1 1', commands: [{ type: 'M', x: 0, y: 0 }, { type: 'L', x: 1, y: 1 }] }) }) };
@@ -13,11 +13,11 @@ const fonts = { sans: fake, serif: fake } as unknown as FontSet;
 const W = 400;
 const H = 600;
 const margins = { top: 30, right: 30, bottom: 30, left: 30 };
-const on = (e: Partial<BorderSettings> = {}): BorderSettings => ({ ...defaultBorder('ink'), enabled: true, ...e });
+const on = (e: Partial<BorderSettings> = {}): BorderSettings => ({ ...defaultBorder('black'), enabled: true, ...e });
 /** A border pass: a closed four-cornered rectangle (centered pass keeps H/V, shifted passes are four L's). */
 const isRect = (d: string) => /^M[\d.]+ [\d.]+H[\d.]+V[\d.]+H[\d.]+Z$/.test(d) || /^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+){3,4}Z$/.test(d);
 const base = (edit: (p: Project) => void = () => {}): Project => {
-  const p = { ...defaultProject(), points: sampleTrack() };
+  const p = cityProject();
   edit(p);
   return p;
 };
@@ -26,7 +26,7 @@ const borders = (p: Project) => buildScene(p).prims.filter((x): x is PathPrim =>
 describe('border layout', () => {
   it('is off by default and draws nothing', () => {
     expect(defaultProject().border.enabled).toBe(false);
-    expect(borderPrims(W, H, defaultBorder('ink'), margins, '#000')).toEqual([]);
+    expect(borderPrims(W, H, defaultBorder('black'), margins, '#000')).toEqual([]);
     expect(borders(base())).toHaveLength(0);
   });
   it('a single border is one rectangle inset from the paper edge', () => {
@@ -77,10 +77,10 @@ describe('border layout', () => {
 
 describe('the border in the poster', () => {
   it('draws one closed line, in the border pen at the chosen weight', () => {
-    const p = base((q) => { q.border = on({ offsetMm: 12, weightMm: 0.6, pen: 'red' }); });
+    const p = base((q) => { q.border = on({ offsetMm: 12, weightMm: 0.6, pen: 'green' }); });
     const b = borders(p);
     expect(b).toHaveLength(1);
-    expect(b[0]).toMatchObject({ mode: 'stroke', widthMm: 0.6, pen: 'red', color: '#b4441f' });
+    expect(b[0]).toMatchObject({ mode: 'stroke', widthMm: 0.6, pen: 'green', color: '#1e7a3c' });
     const { w, h } = posterMm(p);
     expect(b[0]!.d).toBe(`M12 12H${+(w - 12).toFixed(3)}V${+(h - 12).toFixed(3)}H12Z`);
   });
@@ -90,7 +90,7 @@ describe('the border in the poster', () => {
   it('is drawn first, under everything else', () => {
     const p = base((q) => { q.border = on(); });
     const prims = buildScene(p).prims;
-    expect(prims[0]).toMatchObject({ kind: 'path', pen: 'ink', widthMm: 0.5, mode: 'stroke' });
+    expect(prims[0]).toMatchObject({ kind: 'path', pen: 'black', widthMm: 0.5, mode: 'stroke' });
     expect((prims[0] as PathPrim).d).toMatch(/^M12 12H[\d.]+V[\d.]+H12Z$/);
   });
   it('does not change the layout of the map or text', () => {
@@ -111,16 +111,18 @@ describe('the border in the poster', () => {
   });
   it('is listed among the pen users only when on', () => {
     expect(penUsage(base()).some((u) => u.section === 'Border')).toBe(false);
-    expect(penUsage(base((q) => { q.border = on({ pen: 'red' }); })).find((u) => u.section === 'Border')).toEqual({ penId: 'red', section: 'Border' });
+    expect(penUsage(base((q) => { q.border = on({ pen: 'green' }); })).find((u) => u.section === 'Border')).toEqual({ penId: 'green', section: 'Border' });
   });
 });
 
 describe('labels stay inside the border', () => {
   const summit = (edit: (p: Project) => void) => {
     const p = base((q) => {
-      q.waypoints = sampleWaypoints(q.points).slice(0, 1); // the summit, at the right edge of the map
-      q.features.kinds.waypoint = true;
       Object.assign(q.page.margins, { top: 34, right: 34, bottom: 34, left: 34 });
+      // a landmark named Summit at the right edge of the map
+      const v = viewOf(q)!;
+      const [lat, lon] = v.fit.fromMm(v.frame.x + v.frame.w - 0.5, v.frame.y + v.frame.h / 2);
+      q.custom = [{ id: 'custom-1', name: 'Summit', kind: 'custom', lat, lon }];
       edit(q);
     });
     return { p, label: buildScene(p).prims.find((x) => x.kind === 'text' && x.text === 'Summit') as { x: number; anchor: string } | undefined };
@@ -149,30 +151,30 @@ describe('the border in the exports', () => {
   it('SVG: the border is a stroked, round-joined closed path in its own layer when it has its own weight', () => {
     const svg = sceneToSvg(buildScene(base((q) => { q.border = on({ weightMm: 0.77 }); })));
     expect(svg).toContain('stroke-width="0.77"');
-    expect(svg).toContain('id="layer-1f2a24-0.77mm"');
+    expect(svg).toContain('id="layer-111111-0.77mm"');
     expect(svg).toContain('stroke-linejoin="round"');
   });
   it('plotter: a heavy border becomes passes of its pen, each a closed rectangle', () => {
-    const p = base((q) => { q.border = on({ weightMm: 0.9 }); });
+    const p = base((q) => { q.border = on({ weightMm: 0.78 }); });
     const out = prepareScene(buildScene(p), 'plotter', fonts, { pens: p.pens });
     const closed = out.prims.filter((x): x is PathPrim => x.kind === 'path' && isRect(x.d) && x.widthMm === 0.3);
-    expect(closed.length).toBeGreaterThanOrEqual(3); // 0.9 / 0.3 = 3 passes (the north arrow is off)
+    expect(closed.length).toBeGreaterThanOrEqual(3); // 0.78 = 3 passes of a 0.3 mm pen (the north arrow is off)
   });
   it('plotter: a double border is twice the passes of a single one', () => {
     const count = (style: 'single' | 'double') => {
-      const p = base((q) => { q.border = on({ style, weightMm: 0.9 }); q.profile.enabled = false; q.features.enabled = false; });
+      const p = base((q) => { q.border = on({ style, weightMm: 0.78 }); q.features.enabled = false; });
       return prepareScene(buildScene(p), 'plotter', fonts, { pens: p.pens }).prims.filter((x) => x.kind === 'path' && isRect(x.d) && x.widthMm === 0.3).length;
     };
     expect(count('double')).toBe(2 * count('single'));
   });
   it('plotter: the passes of a thin border are a single line at the pen width', () => {
-    const p = base((q) => { q.border = on({ weightMm: 0.3 }); q.profile.enabled = false; q.features.enabled = false; });
+    const p = base((q) => { q.border = on({ weightMm: 0.3 }); q.features.enabled = false; });
     const closed = prepareScene(buildScene(p), 'plotter', fonts, { pens: p.pens }).prims.filter((x) => x.kind === 'path' && isRect(x.d));
     expect(closed).toHaveLength(1);
   });
   it('print: unchanged by the pen tip', () => {
-    const p = base((q) => { q.border = on({ weightMm: 0.9 }); });
+    const p = base((q) => { q.border = on({ weightMm: 0.78 }); });
     const out = prepareScene(buildScene(p), 'print', fonts, { pens: p.pens });
-    expect(out.prims.filter((x) => x.kind === 'path' && x.widthMm === 0.9 && x.d.endsWith('Z') && x.pen === 'ink')).toHaveLength(1);
+    expect(out.prims.filter((x) => x.kind === 'path' && x.widthMm === 0.78 && x.d.endsWith('Z') && x.pen === 'black')).toHaveLength(1);
   });
 });

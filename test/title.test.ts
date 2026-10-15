@@ -8,19 +8,19 @@ import { prepareScene, textToPath, type FontSet } from '../src/export/outlines';
 import { flattenPath } from '../src/export/offset';
 import { HATCH_FACTOR } from '../src/export/hatch';
 import { sceneToSvg } from '../src/export/svg';
-import { sampleTrack } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 import type { PathPrim, TextPrim } from '../src/scene/types';
 
 const b = readFileSync('node_modules/@fontsource/inter/files/inter-latin-400-normal.woff');
 const font = parse(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
 const fonts = { sans: font, serif: font } as unknown as FontSet;
 const base = (edit: (p: Project) => void = () => {}): Project => {
-  const p = { ...defaultProject(), points: sampleTrack() };
+  const p = cityProject();
   p.features.enabled = false;
   edit(p);
   return p;
 };
-const TITLE = 'WALK OF FRAME';
+const TITLE = 'SEATTLE';
 const titles = (p: Project) => buildScene(p).prims.filter((x): x is TextPrim => x.kind === 'text' && x.text === TITLE);
 const setMargins = (p: Project, m: Partial<Project['page']['margins']>) => { Object.assign(p.page.margins, m); p.page.linked = false; };
 const extent = (d: string) => {
@@ -32,7 +32,7 @@ const paths = (s: { prims: unknown[] }) => (s.prims as { kind: string }[]).filte
 describe('title defaults', () => {
   it('filled letters, aligned like the rest, outline and fill pens ink', () => {
     const t = defaultProject().text.title;
-    expect(t).toMatchObject({ align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: 'ink', fillDensity: 'solid' });
+    expect(t).toMatchObject({ align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: 'black', fillDensity: 'solid' });
   });
   it('a default title is one plain text prim, as before', () => {
     const [t] = titles(base());
@@ -56,7 +56,7 @@ describe('title alignment', () => {
     const { p, t } = at((q) => { q.text.align = 'left'; q.text.title.align = 'right'; });
     expect(t.anchor).toBe('end');
     expect(t.x).toBeCloseTo(posterMm(p).w - 20, 6);
-    const other = composeScene(p).scene.prims.find((x): x is TextPrim => x.kind === 'text' && /^Walk|Pierce|DISTANCE/.test(x.text) || (x.kind === 'text' && x.text === 'DISTANCE'));
+    const other = composeScene(p).scene.prims.find((x): x is TextPrim => x.kind === 'text' && x.text === 'AREA');
     expect(other?.anchor).toBe('start'); // the info labels stay left
   });
   it('center is between the margins; left starts at the left margin', () => {
@@ -116,17 +116,17 @@ describe('justified outlines', () => {
 
 describe('title styles', () => {
   it('outline: one text prim, stroked with the outline weight in the title pen', () => {
-    const [x, ...rest] = titles(base((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = 0.6; q.text.title.pen = 'red'; }));
+    const [x, ...rest] = titles(base((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = 0.6; q.text.title.pen = 'green'; }));
     expect(rest).toHaveLength(0);
-    expect(x).toMatchObject({ mode: 'stroke', strokeMm: 0.6, pen: 'red', color: '#b4441f' });
+    expect(x).toMatchObject({ mode: 'stroke', strokeMm: 0.6, pen: 'green', color: '#1e7a3c' });
   });
   it('outline with fill: the inside first, then the outline on top, at the same place', () => {
     const [fill, line] = titles(base((q) => {
-      q.text.title.style = 'outlineFill'; q.text.title.pen = 'ink'; q.text.title.fillPen = 'blue'; q.text.title.fillDensity = 'medium'; q.text.title.outlineMm = 0.4;
+      q.text.title.style = 'outlineFill'; q.text.title.pen = 'black'; q.text.title.fillPen = 'blue'; q.text.title.fillDensity = 'medium'; q.text.title.outlineMm = 0.4;
     }));
-    expect(fill).toMatchObject({ pen: 'blue', color: '#2f6f9f', hatch: 'medium' });
+    expect(fill).toMatchObject({ pen: 'blue', color: '#1f55b5', hatch: 'medium' });
     expect(fill!.mode).toBeUndefined();
-    expect(line).toMatchObject({ mode: 'stroke', strokeMm: 0.4, pen: 'ink' });
+    expect(line).toMatchObject({ mode: 'stroke', strokeMm: 0.4, pen: 'black' });
     expect([fill!.x, fill!.y, fill!.anchor]).toEqual([line!.x, line!.y, line!.anchor]);
   });
   it('both parts of a justified outline-with-fill are stretched to the same width', () => {
@@ -141,13 +141,13 @@ describe('title styles', () => {
   });
   it('live SVG: an outlined title is stroked with no fill, in a stroke layer of its own weight', () => {
     const svg = sceneToSvg(buildScene(base((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = 0.35; })));
-    expect(svg).toMatch(/<text[^>]*fill="none" stroke="#1f2a24" stroke-width="0.35" stroke-linejoin="round"[^>]*>WALK OF FRAME<\/text>/);
-    expect(svg).toContain('id="layer-1f2a24-0.35mm"');
+    expect(svg).toMatch(/<text[^>]*fill="none" stroke="#111111" stroke-width="0.35" stroke-linejoin="round"[^>]*>SEATTLE<\/text>/);
+    expect(svg).toContain('id="layer-111111-0.35mm"');
   });
   it('pens: the outline pen and the fill pen are both listed when outline with fill is chosen', () => {
-    const p = base((q) => { q.text.title.style = 'outlineFill'; q.text.title.pen = 'red'; q.text.title.fillPen = 'blue'; });
+    const p = base((q) => { q.text.title.style = 'outlineFill'; q.text.title.pen = 'green'; q.text.title.fillPen = 'blue'; });
     const use = penUsage(p);
-    expect(use.find((u) => u.section === 'Title outline')?.penId).toBe('red');
+    expect(use.find((u) => u.section === 'Title outline')?.penId).toBe('green');
     expect(use.find((u) => u.section === 'Title fill')?.penId).toBe('blue');
     expect(penUsage(base()).some((u) => u.section === 'Title')).toBe(true);
     expect(penUsage(base()).some((u) => u.section === 'Title fill')).toBe(false);
@@ -162,26 +162,26 @@ describe('title styles in the exports', () => {
   const titleParts = (out: { prims: unknown[] }, size: number) => paths(out).filter((x) => x.d.length > 2000 && x.pen !== undefined && size > 0);
 
   it('print: filled letters are a fill path; outline-only is a stroked path with no fill', () => {
-    const plain = run((q) => { q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; q.profile.enabled = false; }).out;
+    const plain = run((q) => { q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; }).out;
     expect(paths(plain).some((x) => x.mode === 'fill' && x.d.length > 1500)).toBe(true);
-    const outline = run((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = 0.5; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; q.profile.enabled = false; }).out;
+    const outline = run((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = 0.5; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; }).out;
     expect(paths(outline).some((x) => x.mode === 'stroke' && x.widthMm === 0.5 && x.d.length > 1500)).toBe(true);
     // the big title shape is not filled any more (other fills are the elevation profile and small text)
     expect(paths(outline).filter((x) => x.mode === 'fill' && x.d.length > 1500)).toHaveLength(0);
   });
   it('print: outline with fill is a fill in the fill pen plus a stroke in the outline pen', () => {
-    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'red'; q.text.title.outlineMm = 0.5; });
+    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'green'; q.text.title.outlineMm = 0.5; });
     const fill = paths(out).find((x) => x.mode === 'fill' && x.pen === 'blue');
-    const line = paths(out).find((x) => x.mode === 'stroke' && x.pen === 'red' && x.widthMm === 0.5);
+    const line = paths(out).find((x) => x.mode === 'stroke' && x.pen === 'green' && x.widthMm === 0.5);
     expect(fill).toBeDefined();
     expect(line).toBeDefined();
     expect(fill!.d).toBe(line!.d); // the same letter shapes
     expect(out.prims.indexOf(fill!)).toBeLessThan(out.prims.indexOf(line!));
   });
   it('plotter: outline with fill is hatch lines in the fill pen plus the outline in the outline pen', () => {
-    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'red'; q.text.title.outlineMm = 0.3; }, 'plotter');
+    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'green'; q.text.title.outlineMm = 0.3; }, 'plotter');
     const blue = paths(out).filter((x) => x.pen === 'blue' && x.mode === 'stroke');
-    const red = paths(out).filter((x) => x.pen === 'red' && x.d.length > 1500 && x.d.includes('Z'));
+    const red = paths(out).filter((x) => x.pen === 'green' && x.d.length > 1500 && x.d.includes('Z'));
     expect(blue.length).toBeGreaterThan(0);
     expect(red.length).toBeGreaterThan(0);
     const hatch = blue.find((x) => (x.d.match(/M/g) ?? []).length > 50)!;
@@ -210,10 +210,10 @@ describe('title styles in the exports', () => {
   });
   it('plotter: an outline-only title is passes of the pen: a heavy outline repeats', () => {
     const count = (mm: number) => {
-      const { out } = run((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = mm; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; q.profile.enabled = false; }, 'plotter');
-      return paths(out).filter((x) => x.pen === 'ink' && x.d.length > 1500).length;
+      const { out } = run((q) => { q.text.title.style = 'outline'; q.text.title.outlineMm = mm; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; }, 'plotter');
+      return paths(out).filter((x) => x.pen === 'black' && x.d.length > 1500).length;
     };
-    expect(count(0.9)).toBe(3 * count(0.3));
+    expect(count(0.78)).toBe(3 * count(0.3));
   });
   it('plotter: a plain filled title is still just its outline (no hatching unless asked)', () => {
     const { out } = run(() => {}, 'plotter');
@@ -221,36 +221,33 @@ describe('title styles in the exports', () => {
     expect(paths(out).filter((x) => (x.d.match(/M/g) ?? []).length > 100)).toHaveLength(0);
   });
   it('plotter layers: the hatch and the outline each land in one layer per color and tip', () => {
-    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'red'; }, 'plotter');
+    const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'green'; }, 'plotter');
     const ids = [...sceneToSvg(out).matchAll(/<g id="(layer-[^"]+)"/g)].map((m) => m[1]!);
-    expect(ids).toContain('layer-2f6f9f-0.3mm');
-    expect(ids).toContain('layer-b4441f-0.3mm');
+    expect(ids).toContain('layer-1f55b5-0.3mm');
+    expect(ids).toContain('layer-1e7a3c-0.3mm');
     expect(ids.every((i) => i.endsWith('mm'))).toBe(true);
   });
 });
 
-describe('hatching the elevation profile', () => {
-  const run = (hatch: 'off' | 'light' | 'medium' | 'solid') => {
-    const p = base((q) => { q.profile.hatch = hatch; q.text.title.visible = false; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; });
-    return prepareScene(buildScene(p), 'plotter', fonts, { pens: p.pens });
+describe('hatching a filled map area', () => {
+  const run = (fill: 'off' | 'light' | 'medium' | 'solid') => {
+    const p = base((q) => { q.layers.parks.fill = fill; q.text.title.visible = false; q.text.location.visible = false; q.text.info.visible = false; q.showWatermark = false; q.features.enabled = false; });
+    return prepareScene(buildScene(p, cityData()), 'plotter', fonts, { pens: p.pens });
   };
-  const fillLines = (out: { prims: unknown[] }) => paths(out).filter((x) => (x.d.match(/M/g) ?? []).length > 3).reduce((n, x) => n + (x.d.match(/M/g) ?? []).length, 0);
-  it('is off by default: the profile is only outlined', () => {
-    expect(defaultProject().profile.hatch).toBe('off');
-    expect(fillLines(run('off'))).toBe(0);
+  const hatchLines = (out: { prims: unknown[] }) => paths(out).filter((x) => x.color === '#1e7a3c').reduce((n, x) => n + (x.d.match(/M/g) ?? []).length, 0);
+  it('parks are only outlined when the fill is off', () => {
+    expect(hatchLines(run('off'))).toBe(1);
   });
-  it('hatches the profile when asked, denser for solid than light', () => {
-    expect(fillLines(run('light'))).toBeGreaterThan(5);
-    expect(fillLines(run('solid'))).toBeGreaterThan(fillLines(run('light')));
+  it('hatches the park when asked, denser for solid than light', () => {
+    expect(hatchLines(run('light'))).toBeGreaterThan(5);
+    expect(hatchLines(run('solid'))).toBeGreaterThan(hatchLines(run('light')));
   });
-  it('keeps the profile outline as well', () => {
-    expect(paths(run('medium')).some((x) => x.d.includes('Z') || /L/.test(x.d))).toBe(true);
+  it('keeps the outline as well', () => {
+    expect(paths(run('medium')).some((x) => x.color === '#1e7a3c' && x.d.includes('Z'))).toBe(true);
   });
-  it('print is unaffected by the hatch setting', () => {
-    const p = base((q) => { q.profile.hatch = 'solid'; });
-    const out = prepareScene(buildScene(p), 'print', fonts, { pens: p.pens });
-    expect(paths(out).some((x) => x.mode === 'fill' && x.opacity === p.profile.opacity)).toBe(true);
-    expect(titleCount(out)).toBeGreaterThan(0);
+  it('print is unaffected by the density: a tint at a set opacity', () => {
+    const p = base((q) => { q.layers.parks.fill = 'solid'; });
+    const out = prepareScene(buildScene(p, cityData()), 'print', fonts, { pens: p.pens });
+    expect(paths(out).some((x) => x.mode === 'fill' && x.color === '#1e7a3c' && x.opacity! > 0)).toBe(true);
   });
-  function titleCount(out: { prims: unknown[] }) { return paths(out).length; }
 });

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { clampMargins, DEFAULT_MARGIN_MM, defaultProject, posterMm, type Project } from '../src/scene/project';
 import { composeScene } from '../src/scene/buildScene';
 import { marginFromUnits, marginToUnits } from '../src/ui/PagePanel';
-import { sampleTrack } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 import type { TextPrim } from '../src/scene/types';
 
 const base = (edit: (p: Project) => void = () => {}): Project => {
-  const p = { ...defaultProject(), points: sampleTrack() };
+  const p = cityProject();
   edit(p);
   return p;
 };
@@ -50,13 +50,13 @@ describe('clampMargins', () => {
 describe('the layout follows the margins', () => {
   it('left-aligned text starts at the left margin; right-aligned ends at the right margin', () => {
     const left = base((p) => { setMargins(p, { left: 50, right: 10 }); p.text.align = 'left'; });
-    expect(text(left, 'WALK OF FRAME').x).toBeCloseTo(50, 6);
+    expect(text(left, 'SEATTLE').x).toBeCloseTo(50, 6);
     const right = base((p) => { setMargins(p, { left: 50, right: 10 }); p.text.align = 'right'; });
-    expect(text(right, 'WALK OF FRAME').x).toBeCloseTo(posterMm(right).w - 10, 6);
+    expect(text(right, 'SEATTLE').x).toBeCloseTo(posterMm(right).w - 10, 6);
   });
   it('centered text is centered between the margins, not on the page', () => {
     const p = base((q) => { setMargins(q, { left: 80, right: 20 }); q.text.align = 'center'; });
-    expect(text(p, 'WALK OF FRAME').x).toBeCloseTo((80 + posterMm(p).w - 20) / 2, 6);
+    expect(text(p, 'SEATTLE').x).toBeCloseTo((80 + posterMm(p).w - 20) / 2, 6);
   });
   it('the map frame sits inside the margins', () => {
     const p = base((q) => setMargins(q, { top: 40, right: 25, bottom: 35, left: 15 }));
@@ -69,9 +69,9 @@ describe('the layout follows the margins', () => {
   it('the top margin is where top-placed text starts, the bottom margin where the watermark ends', () => {
     const p = base((q) => { setMargins(q, { top: 60, bottom: 45 }); q.text.title.placement = 'top'; });
     const { h } = posterMm(p);
-    expect(text(p, 'WALK OF FRAME').y).toBeGreaterThanOrEqual(60);
-    expect(text(p, 'WALK OF FRAME').y).toBeLessThan(60 + 60 * 25.4 / 72 * 0.8);
-    const wm = composeScene(p).scene.prims.find((x): x is TextPrim => x.kind === 'text' && x.text.startsWith('Generated with'))!;
+    expect(text(p, 'SEATTLE').y).toBeGreaterThanOrEqual(60);
+    expect(text(p, 'SEATTLE').y).toBeLessThan(60 + 60 * 25.4 / 72 * 0.8);
+    const wm = composeScene(p).scene.prims.find((x): x is TextPrim => x.kind === 'text' && x.text.startsWith('Map data'))!;
     expect(wm.y).toBeCloseTo(h - 45, 6);
   });
   it('more margin means a smaller map; less means a larger one', () => {
@@ -89,16 +89,9 @@ describe('the layout follows the margins', () => {
   it('info columns span the content width between the margins', () => {
     const p = base((q) => { setMargins(q, { left: 60, right: 40 }); q.text.align = 'left'; });
     const { w } = posterMm(p);
-    const xs = composeScene(p).scene.prims.filter((x): x is TextPrim => x.kind === 'text' && /DISTANCE|ELEVATION GAIN|DATE/.test(x.text)).map((x) => x.x);
+    const xs = composeScene(p).scene.prims.filter((x): x is TextPrim => x.kind === 'text' && /^(AREA|SCALE)$/.test(x.text)).map((x) => x.x);
     expect(Math.min(...xs)).toBeCloseTo(60, 6);
     expect(Math.max(...xs)).toBeLessThan(w - 40);
-  });
-  it('the corner elevation profile ends at the right margin', () => {
-    const p = base((q) => { setMargins(q, { right: 70 }); q.profile.position = 'corner'; });
-    const { w } = posterMm(p);
-    const scene = composeScene(p).scene;
-    const xs = scene.prims.flatMap((x) => (x.kind === 'path' && x.mode === 'fill' ? (x.d.match(/-?\d+(\.\d+)?/g) ?? []).filter((_, i) => i % 2 === 0).map(Number) : []));
-    expect(Math.max(...xs)).toBeCloseTo(w - 70, 1);
   });
   it('absurd margins are clamped, not allowed to collapse the layout', () => {
     const p = base((q) => setMargins(q, { top: 5000, right: 5000, bottom: 5000, left: 5000 }));

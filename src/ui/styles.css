@@ -46,3 +46,9 @@ button.primary { background:var(--accent); color:#fff; border-color:var(--accent
 .unit { color:var(--muted); font-size:12px; }
 .overrides { margin:6px 0; }
 .overrides summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.passes { font-size:12px; color:var(--muted); white-space:nowrap; }
+.row button { padding:3px 8px; }
+.sheet.dragging { cursor:grabbing !important; user-select:none; }
+.sheet { touch-action:none; }
+.field .row > label { flex-basis:84px; }
+.field .row:first-child > label { color:var(--ink); font-weight:600; flex-basis:auto; }

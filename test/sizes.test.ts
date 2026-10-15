@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, defaultProject, posterMm, PRINT_SIZES, type Project } from '../src/scene/project';
 import { buildScene, composeScene } from '../src/scene/buildScene';
 import { pngSize } from '../src/export/png';
-import { sampleTrack } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 
 const size = (id: string) => PRINT_SIZES.find((s) => s.id === id)!;
-const withSize = (sizeId: string, extra: Partial<Project> = {}): Project => ({ ...defaultProject(), points: sampleTrack(), sizeId, ...extra });
+const withSize = (sizeId: string, extra: Partial<Project> = {}): Project => ({ ...cityProject(), sizeId, ...extra });
 
 describe('the list of print sizes', () => {
   it('has plenty of choices across US, ISO and metric', () => {

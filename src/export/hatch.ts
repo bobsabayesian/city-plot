@@ -1,8 +1,8 @@
-import { flattenPath, type Pt } from './offset';
+import { flattenPath, PASS_OVERLAP, type Pt } from './offset';
 
-/** How densely a fill is hatched, as a multiple of the pen tip: solid leaves a little overlap, light a tint. */
+/** How densely a fill is hatched, as a multiple of the pen tip: solid overlaps neighbouring lines like heavy-line passes do, light a tint. */
 export type HatchDensity = 'solid' | 'medium' | 'light';
-export const HATCH_FACTOR: Record<HatchDensity, number> = { solid: 0.9, medium: 2, light: 4 };
+export const HATCH_FACTOR: Record<HatchDensity, number> = { solid: 1 - PASS_OVERLAP, medium: 2, light: 4 };
 export const HATCH_ANGLE_DEG = 45;
 
 const f = (n: number) => +n.toFixed(3);

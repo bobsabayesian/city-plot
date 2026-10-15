@@ -1,39 +1,60 @@
 import { describe, expect, it } from 'vitest';
-import { flattenPath, offsetPath, offsetPolyline, passCount, passOffsets, type Pt } from '../src/export/offset';
+import { effectiveWidth, flattenPath, offsetPath, offsetPolyline, PASS_OVERLAP, passCount, passOffsets, passWidth, type Pt } from '../src/export/offset';
 import { prepareScene, PLOTTER_PEN_MM, type FontSet } from '../src/export/outlines';
 import { sceneToSvg } from '../src/export/svg';
 import { buildScene } from '../src/scene/buildScene';
-import { defaultProject } from '../src/scene/project';
-import { sampleTrack } from '../src/sample';
+import type { Project } from '../src/scene/project';
+import { cityProject, cityData } from './fixture';
 import type { PathPrim, Scene } from '../src/scene/types';
 
 const fake = { unitsPerEm: 1000, charToGlyph: () => ({ advanceWidth: 500, getPath: () => ({ toPathData: () => 'M0 0L1 1', commands: [{ type: 'M', x: 0, y: 0 }, { type: 'L', x: 1, y: 1 }] }) }) };
 const fonts = { sans: fake, serif: fake } as unknown as FontSet;
-const colorOf = (p: ReturnType<typeof defaultProject>, id: string) => p.pens.find((x) => x.id === id)!.color;
 const paths = (s: Scene) => s.prims.filter((p): p is PathPrim => p.kind === 'path');
 const nums = (d: string) => (d.match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
 
 describe('passes for a heavy line', () => {
-  it('a line no heavier than ~1.5 pens is one pass', () => {
+  it('a line no heavier than the pen is one pass, at the pen width', () => {
     expect(passCount(0.3, 0.3)).toBe(1);
-    expect(passCount(0.12, 0.3)).toBe(1); // thinner than the pen: still one pass, at the pen width
+    expect(passCount(0.12, 0.3)).toBe(1); // thinner than the pen: still one pass
     expect(passCount(0.4, 0.3)).toBe(1);
   });
-  it('heavier lines are repeated passes', () => {
-    expect(passCount(0.9, 0.3)).toBe(3);
-    expect(passCount(0.6, 0.3)).toBe(2);
-    expect(passCount(0.9, 0.2)).toBe(5);
+  it('N passes overlap by 20% of the pen, so they draw 0.3, 0.54, 0.78, 1.02 mm with a 0.3 mm pen', () => {
+    expect(PASS_OVERLAP).toBe(0.2);
+    expect([1, 2, 3, 4].map((n) => +passWidth(n, 0.3).toFixed(6))).toEqual([0.3, 0.54, 0.78, 1.02]);
+    expect([0.3, 0.54, 0.78, 1.02].map((w) => passCount(w, 0.3))).toEqual([1, 2, 3, 4]);
+    expect(passWidth(3, 0.5)).toBeCloseTo(1.3, 9);
   });
-  it('offsets are centered, evenly spaced, and cover the original width without gaps', () => {
-    expect(passOffsets(0.9, 0.3).map((v) => +v.toFixed(6))).toEqual([-0.3, 0, 0.3]);
+  it('a width in between is the nearest whole number of passes', () => {
+    expect(passCount(0.45, 0.3)).toBe(2);
+    expect(passCount(0.6, 0.3)).toBe(2);
+    expect(passCount(0.7, 0.3)).toBe(3);
+    expect(passCount(0.9, 0.3)).toBe(4);
+    expect(passCount(0.78, 0.2)).toBe(5);
+    expect(passCount(2, 0.3)).toBe(8);
+  });
+  it('effectiveWidth is what the passes really draw, and drawing it again changes nothing', () => {
+    expect(effectiveWidth(0.7, 0.3)).toBeCloseTo(0.78, 9);
+    expect(effectiveWidth(0.1, 0.3)).toBe(0.3);
+    for (const [w, pen] of [[0.9, 0.3], [0.6, 0.25], [1.5, 0.4], [0.7, 0.2], [0.05, 0.5]] as const) {
+      const e = effectiveWidth(w, pen);
+      expect(passCount(e, pen)).toBe(passCount(w, pen));
+      expect(effectiveWidth(e, pen)).toBeCloseTo(e, 9);
+    }
+  });
+  it('a minimum raises the count of a thin line and never lowers a heavy one', () => {
+    expect(passCount(0.12, 0.3, 2)).toBe(2);
+    expect(passCount(0.78, 0.3, 2)).toBe(3);
+  });
+  it('offsets are centered, and neighbours are 80% of a pen apart so they overlap by 20%', () => {
+    expect(passOffsets(0.78, 0.3).map((v) => +v.toFixed(6))).toEqual([-0.24, 0, 0.24]);
     expect(passOffsets(0.3, 0.3)).toEqual([0]);
     for (const [w, pen] of [[0.9, 0.3], [0.6, 0.3], [0.9, 0.25], [1.5, 0.4], [0.7, 0.2]] as const) {
       const o = passOffsets(w, pen);
+      expect(o.length).toBe(passCount(w, pen));
       expect(o.reduce((a, b) => a + b, 0)).toBeCloseTo(0, 9); // symmetric
       if (o.length > 1) {
-        const pitch = o[1]! - o[0]!;
-        expect(pitch).toBeLessThanOrEqual(pen + 1e-9); // passes overlap, so no gaps
-        expect(o[o.length - 1]! - o[0]! + pen).toBeLessThanOrEqual(w + 1e-9); // never wider than the original
+        expect(o[1]! - o[0]!).toBeCloseTo(0.8 * pen, 9);
+        expect(o[o.length - 1]! - o[0]! + pen).toBeCloseTo(passWidth(o.length, pen), 9); // together they span exactly the line
       }
     }
   });
@@ -107,62 +128,78 @@ describe('offsetPolyline', () => {
 });
 
 describe('plotter export draws heavy lines as passes of one pen', () => {
-  const base = () => ({ ...defaultProject(), points: sampleTrack() });
-  const routeWidth = (p = base()) => p.route.weightMm;
+  /** Only map lines: no text, landmarks or fills, so every black stroke belongs to a street or a building. */
+  const base = (edit: (p: Project) => void = () => {}) => cityProject((p) => {
+    p.features.enabled = false; p.text.title.visible = false; p.text.location.visible = false; p.text.info.visible = false; p.showWatermark = false;
+    p.layers.parks.fill = 'off'; p.layers.water.fill = 'off';
+    edit(p);
+  });
+  const black = (p: Project) => p.pens.find((x) => x.id === 'black')!.color;
+  const blackStrokes = (out: Scene, p: Project) => paths(out).filter((x) => x.color === black(p));
 
   it('every plotted stroke is exactly the pen width', () => {
-    const out = prepareScene(buildScene(base()), 'plotter', fonts);
+    const out = prepareScene(buildScene(base(), cityData()), 'plotter', fonts);
     expect(paths(out).every((p) => p.mode === 'stroke' && p.widthMm === PLOTTER_PEN_MM)).toBe(true);
   });
-  it('the 0.9 mm route becomes 3 passes with a 0.3 mm pen, in the same color', () => {
+  it('the preview draws each line as thick as its passes make it', () => {
     const p = base();
-    const scene = buildScene(p);
-    const before = paths(scene).filter((x) => x.widthMm === routeWidth(p) && x.color === colorOf(p, p.route.pen)).length;
+    p.layers.major.weightMm = 0.7; // between 2 and 3 passes: 3 is nearer
+    const widths = paths(buildScene(p, cityData())).map((x) => x.widthMm);
+    expect(widths).toContain(0.78);
+    expect(widths).not.toContain(0.7);
+  });
+  it('a 0.78 mm road is 3 passes, a 0.54 mm street 2, a 0.3 mm one 1: all the same pen and color', () => {
+    const p = base();
+    const scene = buildScene(p, cityData());
+    expect(blackStrokes(scene, p).map((x) => x.widthMm).sort()).toEqual([0.3, 0.3, 0.54, 0.78]); // buildings, minor, secondary, major
     const out = prepareScene(scene, 'plotter', fonts);
-    const after = paths(out).filter((x) => x.color === colorOf(p, p.route.pen)).length;
-    expect(after).toBe(before * 3);
+    expect(blackStrokes(out, p)).toHaveLength(1 + 1 + 2 + 3);
   });
-  it('the passes lie side by side: they never touch the original width limits', () => {
-    const p = base();
-    p.route.style = 'solid';
-    const out = prepareScene(buildScene(p), 'plotter', fonts);
-    const lines = paths(out).filter((x) => x.color === colorOf(p, p.route.pen));
+  it('the passes lie side by side, 0.24 mm apart for a 0.3 mm pen', () => {
+    const p = base((q) => { for (const k of ['parks', 'water', 'buildings', 'minor', 'secondary'] as const) q.layers[k].enabled = false; });
+    const out = prepareScene(buildScene(p, cityData()), 'plotter', fonts);
+    const lines = blackStrokes(out, p);
     expect(lines).toHaveLength(3);
-    const firstY = lines.map((l) => nums(l.d)[1]!);
-    expect(new Set(firstY.map((v) => +v.toFixed(2))).size).toBe(3); // three distinct tracks
+    // the road runs diagonally, so passes are shifted in both x and y: compare the distance from the middle one
+    const [a, b, c] = lines.map((l) => nums(l.d).slice(0, 2));
+    const gap = (u: number[], v: number[]) => Math.hypot(u[0]! - v[0]!, u[1]! - v[1]!);
+    expect(gap(a!, b!)).toBeCloseTo(0.24, 1);
+    expect(gap(b!, c!)).toBeCloseTo(0.24, 1);
   });
-  it('a different pen changes the pass count', () => {
-    const scene = buildScene(base());
-    const count = (penMm: number) => paths(prepareScene(scene, 'plotter', fonts, { penMm })).filter((x) => x.color === colorOf(base(), base().route.pen)).length;
-    const one = count(0.9);
-    expect(count(0.3)).toBe(one * 3);
-    expect(count(0.2)).toBe(Math.round((0.9 / 0.2)) * one);
-    expect(paths(prepareScene(scene, 'plotter', fonts, { penMm: 0.5 })).every((x) => x.widthMm === 0.5)).toBe(true);
+  it('a finer pen needs more passes for the same line, a coarser one fewer', () => {
+    const count = (tipMm: number) => {
+      const p = base((q) => { q.pens[0]!.tipMm = tipMm; });
+      return blackStrokes(prepareScene(buildScene(p, cityData()), 'plotter', fonts, { pens: p.pens }), p).length;
+    };
+    expect(count(0.2)).toBeGreaterThan(count(0.3));
+    expect(count(0.5)).toBeLessThan(count(0.3));
+  });
+  it('the pass count follows the layer\'s own pen', () => {
+    const p = base((q) => { q.layers.major.pen = 'green'; q.pens[1]!.tipMm = 0.2; q.layers.parks.enabled = false; });
+    const major = paths(prepareScene(buildScene(p, cityData()), 'plotter', fonts, { pens: p.pens })).filter((x) => x.pen === 'green' && x.widthMm === 0.2);
+    expect(major).toHaveLength(passCount(effectiveWidth(0.78, 0.2), 0.2));
   });
   it('dashes carry over to each pass', () => {
+    const p = base((q) => { q.layers.paths = { enabled: true, pen: 'black', weightMm: 0.54, fill: 'off', style: 'dashed' }; });
+    const d = cityData();
+    d.layers.paths = { covers: d.layers.major!.covers, ways: [{ id: 'p', closed: false, pts: [47.6, -122.34, 47.61, -122.33] }] };
+    const dashed = paths(prepareScene(buildScene(p, d), 'plotter', fonts)).filter((x) => x.dash);
+    expect(dashed).toHaveLength(2);
+    expect(dashed.every((x) => x.dash!.length === 2)).toBe(true);
+  });
+  it('layers collapse to one per pen at the pen width', () => {
     const p = base();
-    p.route.style = 'dashed';
-    const out = prepareScene(buildScene(p), 'plotter', fonts);
-    const route = paths(out).filter((x) => x.color === colorOf(p, p.route.pen));
-    expect(route.length).toBe(3);
-    expect(route.every((x) => x.dash && x.dash.length === 2)).toBe(true);
-  });
-  it('layers collapse to one per color at the pen width, and each layer is one pen', () => {
-    const svg = sceneToSvg(prepareScene(buildScene(base()), 'plotter', fonts));
+    const svg = sceneToSvg(prepareScene(buildScene(p, cityData()), 'plotter', fonts));
     const ids = [...svg.matchAll(/<g id="(layer-[^"]+)"/g)].map((m) => m[1]!);
-    expect(ids).toHaveLength(2);
+    expect(ids).toHaveLength(3); // black, green, blue
     expect(ids.every((i) => i.endsWith('-0.3mm'))).toBe(true);
-    expect(svg).not.toContain('stroke-width="0.9"');
+    expect(svg).not.toContain('stroke-width="0.78"');
   });
-  it('print mode is untouched: no extra passes, original widths kept', () => {
-    const scene = buildScene(base());
+  it('print mode is untouched: no extra passes, the original widths kept', () => {
+    const p = base();
+    const scene = buildScene(p, cityData());
     const out = prepareScene(scene, 'print', fonts);
-    expect(paths(out).filter((x) => x.mode === 'stroke').map((x) => x.widthMm)).toContain(0.9);
+    expect(paths(out).filter((x) => x.mode === 'stroke').map((x) => x.widthMm)).toContain(0.78);
     expect(paths(out).length).toBe(paths(scene).length + scene.prims.filter((x) => x.kind === 'text').length);
-  });
-  it('a pen thicker than a line only raises that line to the pen (it cannot draw thinner)', () => {
-    const scene = buildScene(base());
-    const thin = paths(scene).find((x) => x.mode === 'stroke' && (x.widthMm ?? 1) < 0.5 && x.widthMm! > 0)!;
-    expect(passCount(thin.widthMm!, 0.3)).toBe(1);
   });
 });

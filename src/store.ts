@@ -1,93 +1,163 @@
 import { create } from 'zustand';
-import { defaultProject, type Project } from './scene/project';
-import type { TrackPoint } from './gpx/types';
-import type { Landmark, OsmData, OsmRequest } from './features/types';
-import type { TerrainField } from './topo/terrain';
-import { fetchFeatures, geocodeFeature, type GeocodeHit, nearestPeakName, reverseLocation } from './lookup';
+import { defaultProject, REGION_MAX_KM, REGION_MIN_KM, type Place, type Project, type Region } from './scene/project';
+import { parseLatLon } from './scene/buildScene';
+import type { BBox } from './geo/project';
+import { covered, padBBox } from './city/draw';
+import { LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from './city/types';
+import type { Landmark, LandmarkData } from './features/types';
+import { fetchLandmarks, fetchLayer, geocode, reverseLocation, type GeocodeHit } from './lookup';
+
+export interface FetchState<T> {
+  data?: T;
+  status: 'idle' | 'loading' | 'error';
+  error?: string;
+  /** the area an in-flight request was made for */
+  requested?: BBox;
+}
+
+/** Landmarks are asked for in full up to this view width; wider than that only ones linked to Wikidata. */
+export const NOTABLE_ABOVE_KM = 8;
+/** Data is fetched for the view grown by this much on every side, so a small pan needs no new request. */
+const PAD = 0.15;
 
 interface Store {
   project: Project;
-  terrain?: TerrainField;
-  terrainStatus: 'idle' | 'loading' | 'error';
-  terrainError?: string;
-  /** candidates from the last feature search */
+  /** candidates from the last search */
   searchResults: GeocodeHit[];
   searchIndex: number;
-  osm?: OsmData;
-  osmStatus: 'idle' | 'loading' | 'error';
-  osmError?: string;
+  layers: Partial<Record<LayerKey, FetchState<LayerData>>>;
+  landmarks: FetchState<LandmarkData>;
   busy: string;
   notice: string;
   set: (fn: (p: Project) => void) => void;
-  setTerrain: (t: TerrainField | undefined, status: Store['terrainStatus'], error?: string) => void;
-  loadPoints: (pts: TrackPoint[], lookups?: boolean, waypoints?: Landmark[]) => void;
-  loadOsm: (b: import('./geo/project').BBox, req: OsmRequest) => Promise<void>;
-  retryOsm: () => void;
-  searchFeature: (q: string) => Promise<void>;
-  chooseResult: (i: number) => void;
+  setRegion: (r: Partial<Region>) => void;
+  searchPlace: (q: string) => Promise<void>;
+  choosePlace: (i: number) => void;
+  /** Fetch whatever the current view needs that is not already here or on its way. */
+  ensureData: (view: BBox, widestKm: number) => void;
+  retryData: () => void;
+  addCustom: (name: string, where: string, icon: Landmark['icon']) => Promise<boolean>;
 }
 
-let loadId = 0;
+/** Region a search result starts from: its own extent, kept to a size the layers can draw. */
+export function regionFor(hit: Pick<Place, 'lat' | 'lon' | 'bbox'>): Region {
+  const b = hit.bbox;
+  const km = b ? (b.maxLon - b.minLon) * 111.32 * Math.cos((hit.lat * Math.PI) / 180) : 0;
+  return { lat: hit.lat, lon: hit.lon, widthKm: +Math.min(12, Math.max(1.5, km)).toFixed(2) };
+}
+
+export const clampKm = (km: number) => Math.min(REGION_MAX_KM, Math.max(REGION_MIN_KM, km));
+
+let placeId = 0;
+let customId = 0;
 
 export const useStore = create<Store>((setState, get) => ({
   project: defaultProject(),
-  terrainStatus: 'idle',
   searchResults: [],
   searchIndex: 0,
-  osmStatus: 'idle',
+  layers: {},
+  landmarks: { status: 'idle' },
   busy: '',
   notice: '',
+
   set: (fn) =>
     setState((s) => {
       const project = structuredClone(s.project);
       fn(project);
       return { project };
     }),
-  setTerrain: (terrain, terrainStatus, terrainError) => setState({ terrain, terrainStatus, terrainError }),
 
-  loadOsm: async (b, req) => {
-    setState({ osmStatus: 'loading', osmError: undefined });
+  setRegion: (r) => get().set((p) => {
+    if (!p.region) return;
+    Object.assign(p.region, r);
+    p.region.widthKm = clampKm(p.region.widthKm);
+    p.region.lat = Math.max(-80, Math.min(80, p.region.lat));
+  }),
+
+  choosePlace: (i) => {
+    const hit = get().searchResults[i];
+    if (!hit) return;
+    ++placeId;
+    const place: Place = { name: hit.name, lat: hit.lat, lon: hit.lon, kind: hit.kind, location: hit.location || undefined, bbox: hit.bbox };
+    get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = {}; });
+    setState({ searchIndex: i, layers: {}, landmarks: { status: 'idle' } });
+  },
+
+  searchPlace: async (q) => {
+    setState({ busy: 'Searching…', notice: '' });
     try {
-      setState({ osm: await fetchFeatures(b, req), osmStatus: 'idle' });
+      const at = parseLatLon(q);
+      if (at) {
+        const id = ++placeId;
+        const place: Place = { name: `${at.lat.toFixed(4)}, ${at.lon.toFixed(4)}`, lat: at.lat, lon: at.lon, kind: 'coordinates' };
+        get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = {}; });
+        setState({ searchResults: [], layers: {}, landmarks: { status: 'idle' }, busy: '' });
+        // the poster still gets a region name, a moment later
+        reverseLocation(at.lat, at.lon).then((location) => { if (id === placeId) get().set((p) => { if (p.place) p.place.location = location; }); }).catch(() => {});
+        return;
+      }
+      const results = await geocode(q);
+      setState({ searchResults: results, busy: '' });
+      get().choosePlace(0);
     } catch (e) {
-      setState({ osm: undefined, osmStatus: 'error', osmError: e instanceof Error ? e.message : 'Landmarks failed' });
+      setState({ busy: '', notice: e instanceof Error ? `Search failed: ${e.message}` : 'Search failed' });
     }
   },
 
-  retryOsm: () => setState({ osm: undefined, osmError: undefined }),
+  ensureData: (view, widestKm) => {
+    const s = get();
+    const enabled = LAYER_KEYS.filter((k) => s.project.layers[k].enabled && widestKm <= LAYER_MAX_KM[k]);
+    for (const key of enabled) {
+      const st = s.layers[key];
+      if (covered(st?.data?.covers, view)) continue;
+      if (st?.status === 'loading' && covered(st.requested, view)) continue;
+      if (st?.status === 'error' && covered(st.requested, view)) continue; // the Retry button clears this
+      const ask = padBBox(view, PAD);
+      const keep = st?.data;
+      setState((cur) => ({ layers: { ...cur.layers, [key]: { data: keep, status: 'loading', requested: ask } } }));
+      fetchLayer(key, ask).then(
+        (data) => setState((cur) => cur.layers[key]?.requested === ask ? { layers: { ...cur.layers, [key]: { data, status: 'idle' } } } : {}),
+        (e) => setState((cur) => cur.layers[key]?.requested === ask ? { layers: { ...cur.layers, [key]: { data: keep, status: 'error', error: e instanceof Error ? e.message : 'Failed', requested: ask } } } : {}),
+      );
+    }
 
-  loadPoints: (pts, lookups = true, waypoints = []) => {
-    const id = ++loadId;
-    get().set((p) => { p.points = pts; p.waypoints = waypoints; p.feature = undefined; p.lookup = {}; p.features.overrides = {}; });
-    if (!lookups) return;
-    // Fire-and-forget name lookups; the poster is complete without them. Ignore results if the track changed.
-    const stale = () => id !== loadId;
-    reverseLocation(pts).then((location) => { if (!stale()) get().set((p) => { p.lookup.location = location; }); }).catch(() => {});
-    nearestPeakName(pts).then((peakName) => { if (!stale()) get().set((p) => { p.lookup.peakName = peakName; }); }).catch(() => {});
+    if (!s.project.features.enabled || widestKm > LANDMARKS_MAX_KM) return;
+    const notableOnly = widestKm > NOTABLE_ABOVE_KM;
+    const lm = s.landmarks;
+    // a full list also answers a request for the notable ones
+    const have = (d?: LandmarkData) => !!d && covered(d.covers, view) && (!d.notableOnly || notableOnly);
+    if (have(lm.data) || (lm.status !== 'idle' && covered(lm.requested, view))) return;
+    const ask = padBBox(view, PAD);
+    const keep = lm.data;
+    setState({ landmarks: { data: keep, status: 'loading', requested: ask } });
+    fetchLandmarks(ask, notableOnly).then(
+      (data) => setState((cur) => cur.landmarks.requested === ask ? { landmarks: { data, status: 'idle' } } : {}),
+      (e) => setState((cur) => cur.landmarks.requested === ask ? { landmarks: { data: keep, status: 'error', error: e instanceof Error ? e.message : 'Failed', requested: ask } } : {}),
+    );
   },
 
-  chooseResult: (i) => {
-    const hit = get().searchResults[i];
-    if (!hit) return;
-    loadId++;
-    get().set((p) => {
-      p.points = [];
-      p.waypoints = [];
-      p.features.overrides = {};
-      p.feature = { name: hit.name, bbox: hit.bbox, lat: hit.lat, lon: hit.lon, kind: hit.kind };
-      p.lookup = { location: hit.location || undefined };
-    });
-    setState({ searchIndex: i, osm: undefined });
-  },
+  retryData: () => setState((s) => ({
+    layers: Object.fromEntries(Object.entries(s.layers).map(([k, v]) => [k, v?.status === 'error' ? { data: v.data, status: 'idle' as const } : v])),
+    landmarks: s.landmarks.status === 'error' ? { data: s.landmarks.data, status: 'idle' } : s.landmarks,
+  })),
 
-  searchFeature: async (q) => {
-    setState({ busy: 'Searching…', notice: '' });
+  addCustom: async (name, where, icon) => {
+    setState({ busy: 'Looking up…', notice: '' });
     try {
-      const results = await geocodeFeature(q);
-      setState({ searchResults: results, busy: '' });
-      get().chooseResult(0);
+      const coords = parseLatLon(where);
+      const at = coords ?? (await geocode(where))[0];
+      if (!at) throw new Error('not found');
+      const label = name.trim() || (coords ? 'Landmark' : (at as GeocodeHit).name);
+      get().set((p) => {
+        let n = ++customId;
+        while (p.custom.some((c) => c.id === `custom-${n}`)) n = ++customId;
+        p.custom.push({ id: `custom-${n}`, name: label, kind: 'custom', lat: at.lat, lon: at.lon, icon: icon ?? 'pin' });
+      });
+      setState({ busy: '' });
+      return true;
     } catch (e) {
-      setState({ busy: '', notice: e instanceof Error ? `Search failed: ${e.message}` : 'Search failed' });
+      setState({ busy: '', notice: e instanceof Error ? `Could not find that: ${e.message}` : 'Could not find that' });
+      return false;
     }
   },
 }));

@@ -7,7 +7,7 @@ import { fitBBox } from '../src/geo/project';
 import type { XY } from '../src/geo/clip';
 import { buildScene } from '../src/scene/buildScene';
 import { defaultProject } from '../src/scene/project';
-import { sampleTrack } from '../src/sample';
+import { cityProject, cityData } from './fixture';
 import { sceneToSvg } from '../src/export/svg';
 import { prepareScene, textToPath, type FontSet } from '../src/export/outlines';
 import type { TextPrim } from '../src/scene/types';
@@ -95,7 +95,7 @@ describe('bestStretch', () => {
 });
 
 describe('separate quotas for points and water names', () => {
-  const peaks = Array.from({ length: 12 }, (_, i) => ({ id: `n${i}`, name: `Peak ${i}`, kind: 'peak' as const, lat: 46.03 + i * 0.012, lon: -121.33 + (i % 3) * 0.1, ele: 2000 + i }));
+  const peaks = Array.from({ length: 12 }, (_, i) => ({ id: `n${i}`, name: `Peak ${i}`, kind: 'attraction' as const, lat: 46.03 + i * 0.012, lon: -121.33 + (i % 3) * 0.1, ele: 2000 + i }));
   const rivers = [
     flat('w1', 'Alpha River', 46.05, -121.35, -121.05),
     flat('w2', 'Bravo River', 46.12, -121.35, -121.05),
@@ -106,7 +106,7 @@ describe('separate quotas for points and water names', () => {
     s.maxLabels = maxLabels;
     s.maxWaterLabels = maxWaterLabels;
     const { labels } = placeLandmarks(input(rivers, { landmarks: peaks, settings: s }));
-    return { points: labels.filter((l) => l.kind === 'peak').length, water: labels.filter((l) => l.kind === 'river').length };
+    return { points: labels.filter((l) => l.kind === 'attraction').length, water: labels.filter((l) => l.kind === 'river').length };
   };
   it('a crowd of peaks cannot push every river name out', () => {
     const r = run(8, 2);
@@ -124,8 +124,8 @@ describe('separate quotas for points and water names', () => {
     expect(run(0, 3)).toMatchObject({ points: 0 });
     expect(run(0, 3).water).toBeGreaterThan(0);
   });
-  it('defaults: 8 point labels, 4 water names', () => {
-    expect(defaultFeatures()).toMatchObject({ maxLabels: 8, maxWaterLabels: 4 });
+  it('defaults: 10 landmark labels, 3 water names', () => {
+    expect(defaultFeatures()).toMatchObject({ maxLabels: 10, maxWaterLabels: 3 });
   });
 });
 
@@ -243,15 +243,10 @@ describe('tilted text in exports', () => {
     expect(flipped.cy - 100).toBeCloseTo(-(level.cy - 100), 1);
   });
   it('river names survive print and plotter export as outlines', () => {
-    const p = { ...defaultProject(), points: sampleTrack() };
+    const p = cityProject();
     p.features.waterLabels = true;
-    const osm = {
-      landmarks: [],
-      water: [river('w1', 'Nisqually River', [[46.79, -121.74], [46.83, -121.66]])],
-      covers: B,
-    };
-    const scene = buildScene(p, undefined, osm);
-    const named = scene.prims.find((x) => x.kind === 'text' && x.text === 'Nisqually River') as TextPrim;
+    const scene = buildScene(p, cityData());
+    const named = scene.prims.find((x) => x.kind === 'text' && x.text === 'River Test') as TextPrim;
     expect(named.rotate).toBeDefined();
     for (const mode of ['print', 'plotter'] as const) {
       const out = prepareScene(scene, mode, fonts);
@@ -260,19 +255,26 @@ describe('tilted text in exports', () => {
   });
 });
 
-describe('water settings in the scene', () => {
-  const osm = { landmarks: [], water: [flat('w1', 'Nisqually River', 46.805, -121.78, -121.62)], covers: B };
+describe('water in the scene', () => {
   const run = (f: (p: ReturnType<typeof defaultProject>) => void) => {
-    const p = { ...defaultProject(), points: sampleTrack() };
+    const p = cityProject();
     f(p);
-    const prims = buildScene(p, undefined, osm).prims;
+    const prims = buildScene(p, cityData()).prims;
     return {
-      outline: prims.some((x) => x.kind === 'path' && x.widthMm === p.features.waterWeightMm),
-      label: prims.some((x) => x.kind === 'text' && x.text === 'Nisqually River'),
+      outline: prims.some((x) => x.kind === 'path' && x.color === '#1f55b5'),
+      label: prims.some((x) => x.kind === 'text' && (x.text === 'River Test' || x.text === 'Lake Test')),
     };
   };
-  it('default: outlines drawn, names not', () => expect(run(() => {})).toEqual({ outline: true, label: false }));
-  it('labels without outlines', () => expect(run((p) => { p.features.water = false; p.features.waterLabels = true; })).toEqual({ outline: false, label: true }));
+  it('default: water drawn, names not', () => expect(run(() => {})).toEqual({ outline: true, label: false }));
+  it('names without the water layer', () => expect(run((p) => { p.layers.water.enabled = false; p.features.waterLabels = true; })).toEqual({ outline: false, label: false }));
   it('both', () => expect(run((p) => { p.features.waterLabels = true; })).toEqual({ outline: true, label: true }));
-  it('neither', () => expect(run((p) => { p.features.water = false; })).toEqual({ outline: false, label: false }));
+  it('neither', () => expect(run((p) => { p.layers.water.enabled = false; })).toEqual({ outline: false, label: false }));
+  it('a river inside a lake outline is not drawn twice', () => {
+    const wide = cityProject();
+    const d = cityData();
+    // run the river through the lake: its middle point falls inside the ring
+    d.layers.water!.ways = [d.layers.water!.ways[0]!, { id: 'r', closed: false, sub: 'river', pts: [47.6062 + 0.0065, -122.3321 - 0.009, 47.6062 + 0.0065, -122.3321 - 0.006, 47.6062 + 0.0065, -122.3321 - 0.003] }];
+    const lines = (data: typeof d) => (buildScene(wide, data).prims.find((x) => x.kind === 'path' && x.mode === 'stroke' && x.color === '#1f55b5') as { d: string }).d.split('M').length - 1;
+    expect(lines(d)).toBe(1);
+  });
 });

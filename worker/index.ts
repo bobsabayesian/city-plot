@@ -1,9 +1,9 @@
-import { handleApi } from './api';
+import { handleApi, type FilesBucket } from './api';
 
-interface Env { ASSETS: { fetch: (req: Request) => Promise<Response> } }
+interface Env { ASSETS: { fetch: (req: Request) => Promise<Response> }; FILES: FilesBucket }
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    return (await handleApi(req)) ?? env.ASSETS.fetch(req);
+    return (await handleApi(req, env)) ?? env.ASSETS.fetch(req);
   },
 };

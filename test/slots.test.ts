@@ -5,19 +5,19 @@ import { defaultFeatures, type Landmark, type WaterLine } from '../src/features/
 import { fitBBox } from '../src/geo/project';
 import { buildScene, composeScene } from '../src/scene/buildScene';
 import { defaultProject } from '../src/scene/project';
-import { sampleTrack, sampleWaypoints } from '../src/sample';
+import { cityProject, SEATTLE } from './fixture';
 
 const B = { minLat: 46, maxLat: 46.2, minLon: -121.4, maxLon: -121 };
 const frame = { x: 20, y: 20, w: 300, h: 400 };
 const fit = fitBBox(B, frame);
-const lm = (id: string, name: string, kind: Landmark['kind'], lat: number, lon: number, ele?: number): Landmark => ({ id, name, kind, lat, lon, ele });
+const lm = (id: string, name: string, kind: Landmark['kind'], lat: number, lon: number): Landmark => ({ id, name, kind, lat, lon });
 const input = (landmarks: Landmark[], over: Partial<PlaceInput> = {}): PlaceInput => ({
   landmarks, water: [], fit, frame, route: [], settings: defaultFeatures(), sizeMm: 4, markerR: 2, ...over,
 });
 
-/** Twelve well-spaced peaks, tallest = p11, so rank order is p11, p10, p9, ... */
+/** Twelve well-spaced attractions, listed p11 first, so rank order is p11, p10, p9, ... */
 const peaks: Landmark[] = Array.from({ length: 12 }, (_, i) =>
-  lm(`p${i}`, `Peak ${i}`, 'peak', 46.03 + Math.floor(i / 3) * 0.04, -121.33 + (i % 3) * 0.12, 2000 + i * 50));
+  lm(`p${i}`, `Peak ${i}`, 'attraction', 46.03 + Math.floor(i / 3) * 0.04, -121.33 + (i % 3) * 0.12)).reverse(); // equal rank sorts in list order, so p11 is first
 const ids = (labels: { id: string }[]) => labels.map((l) => l.id).sort();
 const settings = (maxLabels: number, over: Partial<ReturnType<typeof defaultFeatures>> = {}) => ({ ...defaultFeatures(), maxLabels, ...over });
 
@@ -75,32 +75,50 @@ describe('choosing from the list', () => {
     expect(r.pool.find((p) => p.id === 'p6')).toBeUndefined(); // drawn, so no longer offered
   });
   it('the list offers kinds that are switched off, and pinning one draws it anyway', () => {
-    const hut = lm('h1', 'Muir Hut', 'hut', 46.12, -121.2, 3100);
+    const hut = lm('h1', 'Muir Hut', 'worship', 46.12, -121.2);
     const s = settings(5);
-    expect(s.kinds.hut).toBe(false);
+    expect(s.kinds.worship).toBe(false);
     const before = placeLandmarks(input([...peaks.slice(0, 3), hut], { settings: s }));
     expect(before.labels.map((l) => l.id)).not.toContain('h1'); // off, so not drawn on its own
     expect(before.open.point).toBe(2); // 3 peaks, 5 slots
-    expect(before.pool.find((p) => p.id === 'h1')).toMatchObject({ reason: 'kind off', kind: 'hut' });
+    expect(before.pool.find((p) => p.id === 'h1')).toMatchObject({ reason: 'kind off', kind: 'worship' });
     s.overrides['h1'] = { pinned: true };
     const after = placeLandmarks(input([...peaks.slice(0, 3), hut], { settings: s }));
     expect(after.labels.map((l) => l.id)).toContain('h1');
     expect(after.open.point).toBe(1);
   });
   it('seven shown with eight allowed: a slot is open and the pool has the others', () => {
-    // 7 enabled-kind candidates, 1 hut (kind off), limit 8
+    // 7 enabled-kind candidates, 1 worship (kind off), limit 8
     const seven = peaks.slice(0, 7);
-    const hut = lm('h1', 'Old Hut', 'hut', 46.15, -121.15);
+    const hut = lm('h1', 'Old Hut', 'worship', 46.15, -121.15);
     const r = placeLandmarks(input([...seven, hut], { settings: settings(8) }));
     expect(r.labels).toHaveLength(7);
     expect(r.open.point).toBe(1);
     expect(r.pool.map((p) => p.id)).toEqual(['h1']);
   });
-  it('GPX waypoints (off by default) are offered and rank at the top of the list', () => {
-    const wpt = lm('wpt-0', 'Camp', 'waypoint', 46.1, -121.2);
+  it('the user\'s own landmarks are always drawn, rank first, and never use up a slot', () => {
+    const home = lm('custom-1', 'Home', 'custom', 46.1, -121.2);
     const s = settings(5);
-    const r = placeLandmarks(input([...peaks.slice(0, 3), wpt], { settings: s }));
-    expect(r.pool[0]).toMatchObject({ id: 'wpt-0', reason: 'kind off', kind: 'waypoint' });
+    const r = placeLandmarks(input([...peaks, home], { settings: s }));
+    expect(r.labels.map((l) => l.id)).toContain('custom-1');
+    expect(r.labels).toHaveLength(6); // five auto labels, plus Home
+    expect(r.open.point).toBe(0);
+    expect(r.entries.find((e) => e.id === 'custom-1')).toMatchObject({ pinned: true, placed: true });
+  });
+  it('hiding one of your own landmarks does not open a slot', () => {
+    const home = lm('custom-1', 'Home', 'custom', 46.1, -121.2);
+    const s = settings(5);
+    s.overrides['custom-1'] = { hidden: true };
+    const r = placeLandmarks(input([...peaks, home], { settings: s }));
+    expect(r.labels.map((l) => l.id)).not.toContain('custom-1');
+    expect(r.labels).toHaveLength(5);
+    expect(r.open.point).toBe(0);
+  });
+  it('a landmark OpenStreetMap links to Wikidata outranks an equal one that is not', () => {
+    const plain = lm('plain', 'Plain', 'museum', 46.05, -121.3);
+    const famous = { ...lm('famous', 'Famous', 'museum', 46.15, -121.1), notable: true };
+    const r = placeLandmarks(input([plain, famous], { settings: settings(1) }));
+    expect(r.labels.map((l) => l.id)).toEqual(['famous']);
   });
   it('the pool is ranked best first and never includes what is drawn', () => {
     const s = settings(3);
@@ -137,9 +155,9 @@ describe('choosing from the list', () => {
     // two peaks on the same spot: only one label fits, the other has no room but must not block the third
     const [x, y] = fit.toMm(46.1, -121.2);
     const [la, lo] = fit.fromMm(x, y + 0.5);
-    const a = lm('a', 'Alpha Peak Long Name', 'peak', 46.1, -121.2, 3000);
-    const b = lm('b', 'Beta Peak Long Name', 'peak', la, lo, 2900);
-    const far = lm('c', 'Gamma', 'peak', 46.04, -121.35, 2000);
+    const a = lm('a', 'Alpha Peak Long Name', 'attraction', 46.1, -121.2);
+    const b = lm('b', 'Beta Peak Long Name', 'attraction', la, lo);
+    const far = lm('c', 'Gamma', 'attraction', 46.04, -121.35);
     const r = placeLandmarks(input([a, b, far], { settings: settings(3) }));
     expect(r.labels.map((l) => l.id)).toContain('c');
   });
@@ -185,31 +203,29 @@ describe('water name slots work the same way, separately', () => {
 });
 
 describe('the scene and the list text', () => {
+  const near = (id: string, name: string, kind: Landmark['kind'], dLat: number, dLon: number) => lm(id, name, kind, SEATTLE.lat + dLat, SEATTLE.lon + dLon);
   it('composeScene exposes the open slots and pool for the editor', () => {
-    const pts = sampleTrack();
-    const p = { ...defaultProject(), points: pts, waypoints: sampleWaypoints(pts) };
-    const osm = { landmarks: [lm('n1', 'Little Peak', 'peak', 46.805, -121.69, 2800)], water: [], covers: B };
-    const c = composeScene(p, undefined, osm);
+    const p = cityProject();
+    const data = { layers: {}, landmarks: [near('n1', 'Little Museum', 'museum', 0.003, 0.003), near('n2', 'Old Church', 'worship', -0.003, 0.003)] };
+    const c = composeScene(p, data);
     expect(c.open).toEqual({ point: expect.any(Number), water: expect.any(Number) });
-    expect(c.open!.point).toBeGreaterThan(0); // only one enabled-kind candidate for 8 slots
-    expect(c.pool!.some((i) => i.kind === 'waypoint' && i.reason === 'kind off')).toBe(true); // Summit / Trailhead offered
+    expect(c.open!.point).toBeGreaterThan(0); // only one enabled-kind candidate for the slots
+    expect(c.pool!.some((i) => i.kind === 'worship' && i.reason === 'kind off')).toBe(true);
   });
-  it('pinning a waypoint from the list draws it though GPX waypoints are off', () => {
-    const pts = sampleTrack();
-    const p = { ...defaultProject(), points: pts, waypoints: sampleWaypoints(pts) };
-    expect(p.features.kinds.waypoint).toBe(false);
-    p.features.overrides['wpt-0'] = { pinned: true };
-    const texts = buildScene(p).prims.flatMap((x) => (x.kind === 'text' ? [x.text] : []));
-    expect(texts).toContain('Summit');
-    expect(texts).not.toContain('Trailhead');
+  it('pinning a landmark from the list draws it though its kind is off', () => {
+    const p = cityProject();
+    const data = { layers: {}, landmarks: [near('n2', 'Old Church', 'worship', -0.003, 0.003)] };
+    const drawn = () => buildScene(p, data).prims.flatMap((x) => (x.kind === 'text' ? [x.text] : []));
+    expect(p.features.kinds.worship).toBe(false);
+    expect(drawn()).not.toContain('Old Church');
+    p.features.overrides['n2'] = { pinned: true };
+    expect(drawn()).toContain('Old Church');
   });
-  it('describes a list item with its kind, elevation in the chosen units, and why it is not drawn', () => {
-    const item = { id: 'n1', name: 'Little Tahoma', kind: 'peak' as const, group: 'point' as const, ele: 3000, reason: 'kind off' as const };
-    expect(describePoolItem(item, 'imperial')).toBe('Little Tahoma · peak · 9,843 ft (kind switched off)');
-    expect(describePoolItem(item, 'metric')).toBe('Little Tahoma · peak · 3,000 m (kind switched off)');
-    expect(describePoolItem({ ...item, ele: undefined, reason: 'not chosen' }, 'metric')).toBe('Little Tahoma · peak');
-    expect(describePoolItem({ ...item, kind: 'trailhead', reason: 'hidden' }, 'metric')).toContain('trailhead');
-    expect(describePoolItem({ ...item, kind: 'waypoint', reason: 'no room' }, 'metric')).toContain('no room on the map');
+  it('describes a list item with its kind and why it is not drawn', () => {
+    const item = { id: 'n1', name: 'Pike Place', kind: 'attraction' as const, group: 'point' as const, reason: 'kind off' as const };
+    expect(describePoolItem(item)).toBe('Pike Place · attraction (kind switched off)');
+    expect(describePoolItem({ ...item, reason: 'not chosen' })).toBe('Pike Place · attraction');
+    expect(describePoolItem({ ...item, kind: 'station', reason: 'hidden' })).toContain('station');
+    expect(describePoolItem({ ...item, kind: 'custom', reason: 'no room' })).toContain('no room on the map');
   });
 });
-afterEach(() => vi.unstubAllGlobals());

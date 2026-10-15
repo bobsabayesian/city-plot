@@ -1,9 +1,11 @@
-import type { TrackPoint } from '../gpx/types';
 import type { BBox } from '../geo/project';
 import { defaultFeatures, type FeatureSettings, type Landmark } from '../features/types';
-import { defaultPens, PEN_INK, PEN_RED, type Pen } from './pens';
+import { LAYER_KEYS, type LayerKey, type LayerStyle, type StrokeStyle } from '../city/types';
+import { defaultPens, PEN_BLACK, PEN_BLUE, PEN_GREEN, type Pen } from './pens';
 import { defaultBorder, type BorderSettings } from './border';
 import type { HatchDensity } from './types';
+
+export type { StrokeStyle };
 
 export type SizeGroup = 'US (inches)' | 'ISO (A series)' | 'Metric (cm)';
 
@@ -35,12 +37,10 @@ export const CUSTOM_SIZE_MAX_MM = 3000;
 export const DEFAULT_CUSTOM_MM = { wMm: 457.2, hMm: 609.6 };
 
 export type Align = 'left' | 'center' | 'right';
-export type StrokeStyle = 'solid' | 'dashed' | 'dotted';
 export type FontKey = 'sans' | 'serif';
-export type ProfilePosition = 'bottom' | 'corner';
 
 export type Placement = 'top' | 'bottom';
-export type InfoKey = 'distance' | 'gain' | 'maxEle' | 'duration' | 'date' | 'contour';
+export type InfoKey = 'scale' | 'extent';
 export type NorthStyle = 'arrow' | 'circle' | 'compass' | 'rose';
 export type Corner = 'tl' | 'tr' | 'bl' | 'br';
 
@@ -48,7 +48,7 @@ export interface InfoItem {
   key: InfoKey;
   visible: boolean;
   label: string;
-  /** user override; undefined = auto value from the GPX */
+  /** user override; undefined = auto value from the map (scale, area) */
   value?: string;
 }
 
@@ -76,17 +76,29 @@ export interface InfoBlock {
   items: InfoItem[];
 }
 
-export interface Feature {
+/** A city, landmark or address the user searched for (or typed coordinates for). */
+export interface Place {
   name: string;
-  bbox: BBox;
   lat: number;
   lon: number;
-  /** what OpenStreetMap calls it, e.g. "volcano" */
+  /** what OpenStreetMap calls it, e.g. "city" */
   kind?: string;
-  /** view width/height in km; undefined = fit the feature's own extent (min ~6 km) */
-  spanKm?: number;
+  /** region name, e.g. "King County, Washington" */
+  location?: string;
+  /** the place's own extent, which the region starts from */
+  bbox?: BBox;
 }
-export interface Lookup { peakName?: string; location?: string }
+
+/** The ground the map shows: its center and its width. The height follows from the page shape. */
+export interface Region {
+  lat: number;
+  lon: number;
+  widthKm: number;
+}
+
+/** Narrowest and widest region the controls offer. */
+export const REGION_MIN_KM = 0.25;
+export const REGION_MAX_KM = 80;
 
 /** Distances from the paper edge to the content area, in mm. */
 export interface Margins { top: number; right: number; bottom: number; left: number }
@@ -121,60 +133,18 @@ export interface Project {
   page: PageSettings;
   /** a single or double frame inside the page margin */
   border: BorderSettings;
-  points: TrackPoint[];
-  /** typed-in geographic feature; used for the map view when there is no GPX */
-  feature?: Feature;
-  /** named <wpt> entries from the GPX */
-  waypoints: Landmark[];
-  /** names found online for the loaded GPX */
-  lookup: Lookup;
+  /** what was searched for; names the poster */
+  place?: Place;
+  /** the area shown; undefined until a place has been chosen */
+  region?: Region;
+  /** the user's own landmarks ("home", a hotel, …) */
+  custom: Landmark[];
   features: FeatureSettings;
   units: 'imperial' | 'metric';
-  /** the pen palette every section picks from */
+  /** the pen palette every part of the design picks from */
   pens: Pen[];
-  route: { pen: string; weightMm: number; style: StrokeStyle };
-  terrain: {
-    enabled: boolean;
-    /** meters; 0 = automatic */
-    intervalM: number;
-    /** every Nth contour is drawn heavier; 0 = none */
-    indexEvery: number;
-    weightMm: number;
-    indexWeightMm: number;
-    opacity: number;
-    /** one pen for regular lines, heavy lines and the elevation numbers */
-    pen: string;
-    /** elevation numbers written along the heavy contour lines */
-    labels: {
-      enabled: boolean;
-      /** how far apart numbers on the same line are */
-      density: 'sparse' | 'normal' | 'dense';
-      /** label every Nth heavy line (1 = all of them) */
-      every: number;
-      /** leave a gap in the line behind the number (otherwise it sits just above the line) */
-      gap: boolean;
-      sizePt: number;
-    };
-  };
-  profile: {
-    enabled: boolean;
-    position: ProfilePosition;
-    /** one pen for the line, fill, ticks and labels */
-    pen: string;
-    /** how strong the fill is in print and PNG */
-    opacity: number;
-    /** plotter export: hatch the fill with lines of the pen (off = just the outline) */
-    hatch: 'off' | HatchDensity;
-    labels: {
-      /** label the highest and lowest points */
-      extremes: boolean;
-      /** horizontal gridlines with elevation values */
-      yTicks: boolean;
-      /** distance ticks along the bottom */
-      xTicks: boolean;
-      sizePt: number;
-    };
-  };
+  /** how each map layer is drawn */
+  layers: Record<LayerKey, LayerStyle>;
   north: {
     enabled: boolean;
     style: NorthStyle;
@@ -195,50 +165,50 @@ export interface Project {
   watermarkPen: string;
 }
 
+/**
+ * Line thicknesses are multiples of the default 0.3 mm pen: 1, 2, 3 and 4 passes at a 20% overlap are
+ * 0.3, 0.54, 0.78 and 1.02 mm.
+ */
+export const defaultLayers = (): Record<LayerKey, LayerStyle> => ({
+  parks: { enabled: true, pen: PEN_GREEN, weightMm: 0.3, fill: 'light', style: 'solid' },
+  water: { enabled: true, pen: PEN_BLUE, weightMm: 0.3, fill: 'light', style: 'solid' },
+  buildings: { enabled: true, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'solid' },
+  paths: { enabled: false, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'dashed' },
+  minor: { enabled: true, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'solid' },
+  secondary: { enabled: true, pen: PEN_BLACK, weightMm: 0.54, fill: 'off', style: 'solid' },
+  major: { enabled: true, pen: PEN_BLACK, weightMm: 0.78, fill: 'off', style: 'solid' },
+  rail: { enabled: false, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'dashed' },
+});
+
 export const defaultProject = (): Project => ({
   sizeId: '18x24',
   customSize: { ...DEFAULT_CUSTOM_MM },
   landscape: false,
   paper: '#f6f3ec',
   page: { margins: { top: DEFAULT_MARGIN_MM, right: DEFAULT_MARGIN_MM, bottom: DEFAULT_MARGIN_MM, left: DEFAULT_MARGIN_MM }, linked: true },
-  border: defaultBorder(PEN_INK),
-  points: [],
-  waypoints: [],
-  lookup: {},
+  border: defaultBorder(PEN_BLACK),
+  custom: [],
   features: defaultFeatures(),
   units: 'imperial',
   pens: defaultPens(),
-  route: { pen: PEN_RED, weightMm: 0.9, style: 'solid' },
-  terrain: {
-    enabled: true, intervalM: 0, indexEvery: 5,
-    pen: PEN_INK, weightMm: 0.12, indexWeightMm: 0.25, opacity: 0.8,
-    labels: { enabled: false, density: 'normal', every: 1, gap: true, sizePt: 8 },
-  },
-  profile: {
-    enabled: true, position: 'bottom', pen: PEN_INK, opacity: 0.12, hatch: 'off',
-    labels: { extremes: false, yTicks: false, xTicks: false, sizePt: 9 },
-  },
-  north: { enabled: false, style: 'arrow', corner: 'tr', sizeMm: 22, pen: PEN_INK, weightMm: 0.35 },
+  layers: defaultLayers(),
+  north: { enabled: false, style: 'arrow', corner: 'tr', sizeMm: 22, pen: PEN_BLACK, weightMm: 0.35 },
   text: {
     font: 'sans',
     trackingEm: 0.12,
     align: 'left',
-    title: { visible: true, sizePt: 60, placement: 'bottom', pen: PEN_INK, align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: PEN_INK, fillDensity: 'solid' },
-    location: { visible: true, sizePt: 18, placement: 'bottom', showCoords: true, pen: PEN_INK },
+    title: { visible: true, sizePt: 60, placement: 'bottom', pen: PEN_BLACK, align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: PEN_BLACK, fillDensity: 'solid' },
+    location: { visible: true, sizePt: 18, placement: 'bottom', showCoords: true, pen: PEN_BLACK },
     info: {
-      visible: true, pen: PEN_INK, sizePt: 22, placement: 'bottom', layout: 'row',
+      visible: true, pen: PEN_BLACK, sizePt: 22, placement: 'bottom', layout: 'row',
       items: [
-        { key: 'distance', visible: true, label: 'Distance' },
-        { key: 'gain', visible: true, label: 'Elevation gain' },
-        { key: 'maxEle', visible: false, label: 'High point' },
-        { key: 'duration', visible: false, label: 'Time' },
-        { key: 'date', visible: true, label: 'Date' },
-        { key: 'contour', visible: false, label: 'Contour interval' },
+        { key: 'extent', visible: true, label: 'Area' },
+        { key: 'scale', visible: true, label: 'Scale' },
       ],
     },
   },
   showWatermark: true,
-  watermarkPen: PEN_INK,
+  watermarkPen: PEN_BLACK,
 });
 
 /** Page size in mm for the chosen size and orientation. A custom size is kept within sensible limits. */

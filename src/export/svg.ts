@@ -12,7 +12,7 @@ export function normColor(c: string): string {
 function pathEl(p: PathPrim): string {
   const col = normColor(p.color);
   const op = p.opacity !== undefined && p.opacity < 1 ? ` opacity="${f(p.opacity)}"` : '';
-  if (p.mode === 'fill') return `<path d="${p.d}" fill="${col}" stroke="none"${op}/>`;
+  if (p.mode === 'fill') return `<path d="${p.d}" fill="${col}" fill-rule="evenodd" stroke="none"${op}/>`;
   const dash = p.dash ? ` stroke-dasharray="${p.dash.map(f).join(' ')}"` : '';
   return `<path d="${p.d}" fill="none" stroke="${col}" stroke-width="${f(p.widthMm ?? 0.5)}" stroke-linejoin="round" stroke-linecap="${p.round ? 'round' : 'butt'}"${dash}${op}/>`;
 }
