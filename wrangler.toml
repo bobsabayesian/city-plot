@@ -2,6 +2,9 @@ name = "city-plot"
 main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 
+# serve from city.bobsabayesian.io: wrangler creates the DNS record and certificate on deploy (a zone on this account)
+routes = [{ pattern = "city.bobsabayesian.io", custom_domain = true }]
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"

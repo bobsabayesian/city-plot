@@ -74,6 +74,11 @@ export function sceneToSvg(scene: Scene, opts: SvgOptions = {}): string {
       return `<g id="${id}" inkscape:groupmode="layer" inkscape:label="Layer ${i + 1} ${g.label}">${g.els.join('')}</g>`;
     })
     .join('\n');
-  const paper = opts.paper ? `<rect id="paper" width="${f(w)}" height="${f(h)}" fill="${normColor(scene.paper)}"/>\n` : '';
+  const sh = scene.shape;
+  const fillPaper = normColor(scene.paper);
+  const paper = !opts.paper ? ''
+    : sh?.kind === 'circle' ? `<circle id="paper" cx="${f(w / 2)}" cy="${f(h / 2)}" r="${f(Math.min(w, h) / 2)}" fill="${fillPaper}"/>\n`
+    : sh?.kind === 'roundrect' ? `<rect id="paper" width="${f(w)}" height="${f(h)}" rx="${f(sh.radiusMm)}" fill="${fillPaper}"/>\n`
+    : `<rect id="paper" width="${f(w)}" height="${f(h)}" fill="${fillPaper}"/>\n`;
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="${f(w)}mm" height="${f(h)}mm" viewBox="0 0 ${f(w)} ${f(h)}">\n${paper}${layers}\n</svg>`;
 }

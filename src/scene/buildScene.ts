@@ -1,7 +1,7 @@
 import { fitBBox, inverseMercator, mercator, rotateFit, type BBox, type Fit } from '../geo/project';
-import type { Rect } from '../geo/clip';
+import { circlePolygon, roundRectPolygon, type Rect, type XY } from '../geo/clip';
 import { formatCoords, formatKm, formatMiles } from '../geo/format';
-import { layerPrims, waterLines } from '../city/draw';
+import { layerPrims, waterLines, type MapClip } from '../city/draw';
 import { LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from '../city/types';
 import { landmarkPrims } from '../features/draw';
 import type { LandmarkEntry, LandmarkPlacement } from '../features/select';
@@ -10,7 +10,7 @@ import { northPrims } from './north';
 import { borderExtent, borderPrims, layoutBorder } from './border';
 import { featurePenId, penFor } from './pens';
 import type { Prim, Scene } from './types';
-import { clampMargins, posterMm, type InfoItem, type Placement, type Project, type Region } from './project';
+import { clampMargins, posterMm, sizeShape, type InfoItem, type Placement, type Project, type Region } from './project';
 
 const PT = 25.4 / 72;
 /** Poster title when nothing has been searched for yet. */
@@ -236,16 +236,35 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
       return { x: x0, y: y0, w: Math.min(r.x + r.w, W - innerBorder) - x0, h: Math.min(r.y + r.h, H - innerBorder) - y0 };
     };
 
+    // a coaster cuts the map to a circle or a rounded rectangle inside the frame
+    const mapShape = sizeShape(p);
+    let clip: MapClip | undefined;
+    let northFrame = frame;
+    if (mapShape?.shape === 'circle') {
+      const r = Math.min(frame.w, frame.h) / 2;
+      const [cx, cy] = [frame.x + frame.w / 2, frame.y + frame.h / 2];
+      const half = r / Math.SQRT2;
+      clip = { poly: circlePolygon(cx, cy, r), safe: { x: cx - half, y: cy - half, w: 2 * half, h: 2 * half } };
+      northFrame = clip.safe;
+    } else if (mapShape?.shape === 'roundrect') {
+      // concentric with the paper's own corners
+      const rad = Math.max(0, (mapShape.cornerMm ?? 0) - minMargin);
+      clip = { poly: roundRectPolygon(frame, rad), safe: { x: frame.x, y: frame.y + rad, w: frame.w, h: Math.max(0, frame.h - 2 * rad) } };
+      const inset = rad * 0.3;
+      northFrame = { x: frame.x + inset, y: frame.y + inset, w: frame.w - 2 * inset, h: frame.h - 2 * inset };
+    }
+    const inClip = clip ? (x: number, y: number) => pointInConvex(x, y, clip!.poly) : undefined;
+
     // the map layers, bottom first; a layer is skipped when the view is wider than it is made for
     for (const key of LAYER_KEYS) {
       const style = p.layers[key];
       const layer = data?.layers[key];
       if (!style.enabled || !layer || widest > LAYER_MAX_KM[key]) continue;
-      prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame));
+      prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame, clip));
     }
 
     if (p.north.enabled) {
-      prims.push(...northPrims(frame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }));
+      prims.push(...northPrims(northFrame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }));
     }
 
     if (p.features.enabled) {
@@ -255,7 +274,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
         water: p.features.waterLabels && p.layers.water.enabled && widest <= LAYER_MAX_KM.water ? waterLines(data?.layers.water) : [],
         fit, frame, route: [],
         labelBounds: withinBorder({ x: frame.x - mg.left * 0.5, y: frame.y - mg.top * 0.5, w: frame.w + (mg.left + mg.right) * 0.5, h: frame.h + mg.top * 0.5 }),
-        settings: p.features, sizeMm,
+        settings: p.features, sizeMm, inside: inClip,
         markerR: Math.min(W, H) * 0.0045,
         penFor: (kind) => penFor(p.pens, featurePenId(p.features, penKeyOf(kind))),
         fontFamily, fontKey: t.font, trackingMm: sizeMm * 0.05,
@@ -267,7 +286,9 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     }
   }
 
-  return { scene: { widthMm: W, heightMm: H, paper: p.paper, prims }, view, landmarks, pool, open };
+  const cut = sizeShape(p);
+  const shape: Scene['shape'] = cut?.shape === 'circle' ? { kind: 'circle' } : cut?.shape === 'roundrect' ? { kind: 'roundrect', radiusMm: cut.cornerMm ?? 0 } : undefined;
+  return { scene: { widthMm: W, heightMm: H, paper: p.paper, ...(shape ? { shape } : {}), prims }, view, landmarks, pool, open };
 }
 
 export const composeScene = (p: Project, data?: CityData): Composed => compose(p, false, data);
@@ -275,3 +296,15 @@ export const buildScene = (p: Project, data?: CityData): Scene => compose(p, fal
 
 /** The geographic area the map frame shows; data must cover this. Cheap (no map drawing). */
 export const viewOf = (p: Project): View | undefined => compose(p, true).view;
+
+/** Is (x, y) inside a convex polygon? */
+function pointInConvex(x: number, y: number, poly: XY[]): boolean {
+  let sign = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [ax, ay] = poly[i]!;
+    const [bx, by] = poly[(i + 1) % poly.length]!;
+    const c = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+    if (c !== 0) { if (sign && Math.sign(c) !== sign) return false; sign = Math.sign(c); }
+  }
+  return true;
+}

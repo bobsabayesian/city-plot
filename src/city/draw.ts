@@ -1,4 +1,4 @@
-import { clipPolygon, clipPolyline, pointInRing, simplifyXY, type Rect, type XY } from '../geo/clip';
+import { clipPolygon, clipPolygonConvex, clipPolyline, clipPolylineConvex, pointInRing, simplifyXY, type Rect, type XY } from '../geo/clip';
 import type { BBox, Fit } from '../geo/project';
 import { effectiveWidth } from '../export/offset';
 import type { Pen } from '../scene/pens';
@@ -54,7 +54,10 @@ function withoutCoveredLines(lines: { sub?: string; pts: XY[] }[], rings: XY[][]
  * for area layers with a fill, the inside of the rings as one filled path. Everything is clipped to the frame.
  * The line is as thick as the pen's whole passes make it (see `effectiveWidth`), so the preview shows what plots.
  */
-export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: LayerData, fit: Fit, frame: Rect): PathPrim[] {
+/** A shape the map is cut to (a coaster): a convex polygon inside the frame, and a rectangle known to be inside it. */
+export interface MapClip { poly: XY[]; safe: Rect }
+
+export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: LayerData, fit: Fit, frame: Rect, clip?: MapClip): PathPrim[] {
   const prims: PathPrim[] = [];
   const lines: { sub?: string; pts: XY[] }[] = [];
   const rings: XY[][] = [];
@@ -72,7 +75,8 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
   const kept = key === 'water' ? withoutCoveredLines(lines, rings) : lines;
   const d: string[] = [];
   const stroke = (pts: XY[]) => {
-    for (const piece of clipPolyline(simplifyXY(pts, SIMPLIFY_MM), frame)) {
+    const simple = simplifyXY(pts, SIMPLIFY_MM);
+    for (const piece of clip ? clipPolylineConvex(simple, clip.poly, clip.safe) : clipPolyline(simple, frame)) {
       const first = piece[0]!;
       const last = piece[piece.length - 1]!;
       d.push(sub(piece, piece.length > 3 && first[0] === last[0] && first[1] === last[1]));
@@ -86,7 +90,7 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
   }
 
   if (isAreaLayer(key) && style.fill !== 'off' && rings.length) {
-    const fill = rings.map((r) => clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame)).filter((r) => r.length >= 3).map((r) => sub(r, true));
+    const fill = rings.map((r) => (clip ? clipPolygonConvex(simplifyXY(r, SIMPLIFY_MM), clip.poly) : clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame))).filter((r) => r.length >= 3).map((r) => sub(r, true));
     if (fill.length) prims.unshift({ kind: 'path', d: fill.join(''), color: pen.color, pen: pen.id, mode: 'fill', opacity: FILL_OPACITY[style.fill], hatch: style.fill });
   }
   return prims;

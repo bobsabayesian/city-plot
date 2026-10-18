@@ -2,6 +2,7 @@ import { clampMargins, posterMm, type Margins, type Project } from '../scene/pro
 import { borderExtent } from '../scene/border';
 import { PenSelect } from './PensPanel';
 import { useStore } from '../store';
+import { Group } from './Group';
 
 const SIDES: { key: keyof Margins; label: string }[] = [
   { key: 'top', label: 'Top' }, { key: 'right', label: 'Right' }, { key: 'bottom', label: 'Bottom' }, { key: 'left', label: 'Left' },
@@ -31,7 +32,7 @@ export function PagePanel({ project: p }: { project: Project }) {
 
   return (
     <>
-      <h2>Page margin</h2>
+      <Group id="page" title="Page margin">
       <div className="row">
         <label><input type="checkbox" checked={p.page.linked} onChange={(e) => set((x) => {
           x.page.linked = e.target.checked;
@@ -49,7 +50,8 @@ export function PagePanel({ project: p }: { project: Project }) {
         {p.border.enabled ? 'Space between the inside of the border and the map and text. ' : 'Distance from the paper edge to the map and text. '}Margins stay the same when you change the poster size.
         {clamped ? ' Reduced to leave room for the content (at least 20% of the page each way).' : ''}
       </div>
-      <h2>Border margin</h2>
+      </Group>
+      <Group id="border" title="Border margin">
       <div className="row">
         <label><input type="checkbox" checked={p.border.enabled} onChange={(e) => set((x) => { x.border.enabled = e.target.checked; })} /> Draw a border</label>
       </div>
@@ -82,6 +84,7 @@ export function PagePanel({ project: p }: { project: Project }) {
           <div className="hint">Distance from the paper edge to the border. The page margin is measured from inside it.</div>
         </>);
       })()}
+      </Group>
     </>
   );
 }

@@ -42,6 +42,8 @@ export interface PlaceInput {
   settings: FeatureSettings;
   sizeMm: number;
   markerR: number;
+  /** the map is cut to a shape (a coaster): only points and labels inside it are kept */
+  inside?: (x: number, y: number) => boolean;
 }
 
 /** An oriented rectangle: center, size, and turn in radians (clockwise on screen). */
@@ -277,7 +279,9 @@ const MAX_POOL = 60;
  */
 export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   const { settings: s, fit, frame, route, sizeMm, markerR } = inp;
-  const inFrame = ([x, y]: XY) => x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h;
+  const inFrame = ([x, y]: XY) => x >= frame.x && x <= frame.x + frame.w && y >= frame.y && y <= frame.y + frame.h && (!inp.inside || inp.inside(x, y));
+  /** a label box lies inside the bounds and, on a shaped map, inside the shape */
+  const fits = (box: Box, bounds: Rect) => insideBounds(box, bounds) && (!inp.inside || corners(box).every(([x, y]) => inp.inside!(x, y)));
 
   const proximityScale = 0.1 * Math.min(frame.w, frame.h);
 
@@ -370,7 +374,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
           const box: Box = { cx: center[0], cy: center[1], w, h, ang: st.angle };
           // text stays upright either way: its baseline is 0.35 * size below the box center along the text's own up
           const baseline: XY = [center[0] - nx * sz * 0.35, center[1] - ny * sz * 0.35];
-          if (insideBounds(box, lb) && !routeHits(route, box) && !taken.some((t) => overlap(t, box))) {
+          if (fits(box, lb) && !routeHits(route, box) && !taken.some((t) => overlap(t, box))) {
             taken.push(box);
             labels.push({ id: c.id, kind: 'river', text: name, x: baseline[0], y: baseline[1], anchor: 'middle', rotate: (st.angle * 180) / Math.PI });
             return true;
@@ -424,7 +428,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
         label = { ...base, x: c.x, y: c.y + sz * 0.35, anchor: 'middle' };
         box = boxAt(c.x - w / 2, c.y - sz * 0.55, c.x + w / 2, c.y + sz * 0.45);
       }
-      const inside = insideBounds(box, lb);
+      const inside = fits(box, lb);
       const labelsFree = !taken.some((t) => overlap(t, box)) && !(hasMarker && side !== 'middle' && overlap(box, markerBox));
       const crossesRoute = routeHits(route, box);
       if ((inside && labelsFree && !crossesRoute) || forced) {

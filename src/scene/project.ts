@@ -7,7 +7,7 @@ import type { HatchDensity } from './types';
 
 export type { StrokeStyle };
 
-export type SizeGroup = 'US (inches)' | 'ISO (A series)' | 'Metric (cm)';
+export type SizeGroup = 'US (inches)' | 'ISO (A series)' | 'Metric (cm)' | 'Coasters';
 
 export interface PrintSize {
   id: string;
@@ -16,18 +16,50 @@ export interface PrintSize {
   /** portrait size in mm (exact for ISO and metric; inches converted for US sizes) */
   wMm: number;
   hMm: number;
+  /** a size cut to a shape: the map and the paper outline follow it. Absent = a plain rectangle. */
+  shape?: 'roundrect' | 'circle';
+  /** roundrect: corner radius, mm */
+  cornerMm?: number;
 }
 
 const inch = (w: number, h: number): PrintSize => ({ id: `${w}x${h}`, label: `${w} × ${h} in`, group: 'US (inches)', wMm: +(w * 25.4).toFixed(3), hMm: +(h * 25.4).toFixed(3) });
 const iso = (n: number, w: number, h: number): PrintSize => ({ id: `a${n}`, label: `A${n} (${w} × ${h} mm)`, group: 'ISO (A series)', wMm: w, hMm: h });
 const cm = (w: number, h: number): PrintSize => ({ id: `cm${w}x${h}`, label: `${w} × ${h} cm`, group: 'Metric (cm)', wMm: w * 10, hMm: h * 10 });
 
+/** 4 in coasters, the usual size: round, and a 4 x 3 in rounded rectangle (stored portrait, like every size). */
+const coasters: PrintSize[] = [
+  { id: 'coaster-roundrect', label: 'Coaster, rounded rectangle (3 × 4 in)', group: 'Coasters', wMm: 76.2, hMm: 101.6, shape: 'roundrect', cornerMm: 8 },
+  { id: 'coaster-circle', label: 'Coaster, circle (4 in)', group: 'Coasters', wMm: 101.6, hMm: 101.6, shape: 'circle' },
+];
+
 export const PRINT_SIZES: PrintSize[] = [
   inch(5, 7), inch(8, 10), inch(11, 14), inch(11, 17), inch(12, 16), inch(12, 18), inch(16, 20), inch(16, 24),
   inch(18, 24), inch(20, 24), inch(20, 30), inch(24, 30), inch(24, 36), inch(27, 40), inch(30, 40), inch(36, 48),
   iso(5, 148, 210), iso(4, 210, 297), iso(3, 297, 420), iso(2, 420, 594), iso(1, 594, 841), iso(0, 841, 1189),
   cm(21, 30), cm(30, 40), cm(40, 50), cm(50, 70), cm(60, 90), cm(70, 100),
+  ...coasters,
 ];
+
+/** The cut shape of the chosen size, if it has one. */
+export const sizeShape = (p: Pick<Project, 'sizeId'>): PrintSize | undefined => PRINT_SIZES.find((x) => x.id === p.sizeId && x.shape);
+
+/** What switching to a coaster size changes: tiny pages need small margins, small labels and lighter lines. */
+export function coasterPreset(p: Project): void {
+  p.page.margins = { top: 5, right: 5, bottom: 5, left: 5 };
+  p.page.linked = true;
+  p.border.enabled = false;
+  p.text.title.visible = false;
+  p.text.location.visible = false;
+  p.text.info.visible = false;
+  p.showWatermark = false; // the attribution line does not fit on a coaster: credit OpenStreetMap on the product
+  p.features.maxLabels = Math.min(p.features.maxLabels, 4);
+  p.features.sizePt = 6;
+  // 100 mm of paper is dense: buildings off and lighter streets, so a 0.3 mm pen does not fill it in
+  p.layers.buildings.enabled = false;
+  p.layers.paths.enabled = false;
+  p.layers.secondary.weightMm = p.layers.minor.weightMm;
+  p.layers.major.weightMm = Math.min(p.layers.major.weightMm, 0.54);
+}
 
 /** Id for a size the user types in. */
 export const CUSTOM_SIZE_ID = 'custom';

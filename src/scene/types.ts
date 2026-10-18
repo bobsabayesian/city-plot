@@ -52,6 +52,8 @@ export interface Scene {
   widthMm: number;
   heightMm: number;
   paper: string;
+  /** the paper is cut to this shape (a coaster) instead of a rectangle */
+  shape?: { kind: 'circle' } | { kind: 'roundrect'; radiusMm: number };
   /** painter's order: first drawn first */
   prims: Prim[];
 }

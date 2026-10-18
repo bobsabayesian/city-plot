@@ -16,7 +16,7 @@ describe('the list of print sizes', () => {
     expect(new Set(PRINT_SIZES.map((s) => s.id)).size).toBe(PRINT_SIZES.length);
     for (const s of PRINT_SIZES) {
       expect(s.label.length).toBeGreaterThan(2);
-      expect(s.wMm).toBeLessThan(s.hMm);
+      expect(s.wMm).toBeLessThanOrEqual(s.hMm);
       expect(s.wMm).toBeGreaterThanOrEqual(CUSTOM_SIZE_MIN_MM);
       expect(s.hMm).toBeLessThanOrEqual(CUSTOM_SIZE_MAX_MM);
     }

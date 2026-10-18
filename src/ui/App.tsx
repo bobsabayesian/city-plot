@@ -10,12 +10,13 @@ import { loadFonts } from '../export/fonts';
 import { prepareScene, tipFor, type ExportMode } from '../export/outlines';
 import { passCount, passWidth, summarizePasses } from '../export/offset';
 import { PenSelect, PensPanel } from './PensPanel';
+import { Group, Groups, NARROW_QUERY, useMediaQuery } from './Group';
 import { PagePanel } from './PagePanel';
 import { FEATURE_PEN_LABELS, penFor } from '../scene/pens';
 import type { FeaturePenKey } from '../features/types';
 import { inverseMercator, mercator } from '../geo/project';
 import { isAreaLayer, LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_LABELS, LAYER_MAX_KM, type LayerKey } from '../city/types';
-import { REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
+import { coasterPreset, sizeShape, REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
 
 const PlaceRow = ({ value, onChange }: { value: Placement; onChange: (v: Placement) => void }) => (
   <Row label="Position">
@@ -67,6 +68,8 @@ export function App() {
   const { project: p, set, setRegion, searchResults, searchIndex, choosePlace, searchPlace, ensureData, retryData, addCustom, busy, notice } = useStore();
   const layerState = useStore((s) => s.layers);
   const landmarkState = useStore((s) => s.landmarks);
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const [tab, setTab] = useState<'settings' | 'map'>('settings');
   const [query, setQuery] = useState('');
   const [err, setErr] = useState('');
   const [paperInExport, setPaperInExport] = useState(false);
@@ -199,11 +202,32 @@ export function App() {
   };
 
   return (
-    <div className="app">
-      <aside className="panel">
-        <h1>CITY PLOT</h1>
-        <h2>Place</h2>
-        <form className="row" onSubmit={(e) => { e.preventDefault(); if (query.trim()) searchPlace(query.trim()); }}>
+    <div className={`app${narrow ? ' narrow' : ''}`}>
+      {narrow ? (
+        <div className="tabs" role="tablist" aria-label="View"
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            const next = tab === 'settings' ? 'map' : 'settings';
+            setTab(next);
+            document.getElementById(`tab-${next}`)?.focus();
+            e.preventDefault();
+          }}>
+          {(['settings', 'map'] as const).map((t) => (
+            <button key={t} type="button" role="tab" id={`tab-${t}`} aria-selected={tab === t} aria-controls={t === 'settings' ? 'panel-settings' : 'preview'} tabIndex={tab === t ? 0 : -1}
+              className={tab === t ? 'tab active' : 'tab'} onClick={() => setTab(t)}>
+              {t === 'settings' ? 'Settings' : 'Map'}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <a className="skip-link" href="#preview">Skip to the map</a>
+      )}
+      <aside className="panel" id="panel-settings" hidden={narrow && tab !== 'settings'} {...(narrow ? { role: 'tabpanel', 'aria-labelledby': 'tab-settings' } : {})}>
+        <Groups narrow={narrow} initial={['place']}>
+        <h1>City Plot</h1>
+        <p className="about-link">Pen-plotter maps from OpenStreetMap</p>
+        <Group id="place" title="Place">
+        <form className="row" onSubmit={(e) => { e.preventDefault(); if (query.trim()) void searchPlace(query.trim()).then(() => { if (narrow && !useStore.getState().notice) setTab('map'); }); }}>
           <input type="text" placeholder="City, landmark, address, or lat, lon" value={query} onChange={(e) => setQuery(e.target.value)} />
           <button disabled={!!busy}>{busy || 'Go'}</button>
         </form>
@@ -219,9 +243,10 @@ export function App() {
           </div>
         )}
         {!p.place && <div className="hint">Search for a city or a landmark to start. You can then move the map and set how much ground it covers.</div>}
+        </Group>
 
         {region && view && (<>
-          <h2>Region</h2>
+        <Group id="region" title="Region">
           <div className="hint">Drag the map to move it. Scroll over it to zoom. The area follows the page shape, so a taller page shows more north to south.</div>
           <Row label="Width">
             <input type="range" min={Math.log(REGION_MIN_KM)} max={Math.log(REGION_MAX_KM)} step={0.01} value={Math.log(region.widthKm)} onChange={(e) => setRegion({ widthKm: +Math.exp(+e.target.value).toFixed(3) })} />
@@ -239,11 +264,12 @@ export function App() {
           <div className="hint">Turns the map clockwise; the north arrow turns with it. Shift-drag the map to rotate it.</div>
           <div className="hint">Covers {fmtKm(view.widthKm)} × {fmtKm(view.heightKm)} · scale 1:{view.scale.toLocaleString('en-US')}</div>
           {p.place && <div className="row"><button onClick={() => { const pl = p.place!; setRegion({ lat: pl.lat, lon: pl.lon }); }}>Center on {p.place.name}</button></div>}
+        </Group>
         </>)}
 
         <PensPanel project={p} scene={scene} />
 
-        <h2>Map layers</h2>
+        <Group id="layers" title="Map layers">
         <div className="hint">Each layer is drawn with one of your pens. A line is drawn as passes of the pen side by side, overlapping by 20%, so its thickness is whole passes: a 0.3 mm pen draws 0.3, 0.54, 0.78, 1.02 mm… Anything thinner than the pen is one pass.</div>
         {[...LAYER_KEYS].reverse().map((key) => {
           const st = p.layers[key];
@@ -274,8 +300,9 @@ export function App() {
             </div>
           );
         })}
+        </Group>
 
-        <h2>Landmarks</h2>
+        <Group id="landmarks" title="Landmarks">
         <Row label="Show">
           <input type="checkbox" checked={p.features.enabled} onChange={(e) => set((x) => { x.features.enabled = e.target.checked; })} />
           <span>{landmarkState.status === 'loading' ? 'Loading landmarks…' : ''}</span>
@@ -348,8 +375,9 @@ export function App() {
             );
           })}
         </>)}
+        </Group>
 
-        <h3>My landmarks</h3>
+        <Group id="mine" title="My landmarks">
         <div className="hint">Mark your own places, like home. Give an address (or a place name) or latitude, longitude. A place you search for is added here, switched off; tick it to mark it on the map.</div>
         <form className="field" onSubmit={async (e) => {
           e.preventDefault();
@@ -401,11 +429,12 @@ export function App() {
             </div>
           );
         })}
+        </Group>
 
-        <h2>Print size</h2>
+        <Group id="size" title="Print size">
         <Row label="Size">
-          <select value={p.sizeId} onChange={(e) => set((x) => { x.sizeId = e.target.value; })}>
-            {(['US (inches)', 'ISO (A series)', 'Metric (cm)'] as SizeGroup[]).map((g) => (
+          <select value={p.sizeId} onChange={(e) => set((x) => { x.sizeId = e.target.value; if (sizeShape(x)) coasterPreset(x); })}>
+            {(['US (inches)', 'ISO (A series)', 'Metric (cm)', 'Coasters'] as SizeGroup[]).map((g) => (
               <optgroup key={g} label={g}>
                 {PRINT_SIZES.filter((s) => s.group === g).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
               </optgroup>
@@ -425,6 +454,7 @@ export function App() {
             <div className="hint">Between {lim(CUSTOM_SIZE_MIN_MM)} and {lim(CUSTOM_SIZE_MAX_MM)} {inches ? 'in' : 'cm'}. Width and height are for a portrait page; use Orientation to turn it.</div>
           </>);
         })()}
+        {sizeShape(p) && <div className="hint">Coaster: the map is cut to the {sizeShape(p)!.shape === 'circle' ? 'circle' : 'rounded rectangle'}, and the text blocks and attribution are switched off to make room. Margins are set to 5 mm. Turn the title back on under Typography if you want it. The map data is © OpenStreetMap contributors, so credit it on the product.</div>}
         <Row label="Orientation">
           <select value={p.landscape ? 'l' : 'p'} onChange={(e) => set((x) => { x.landscape = e.target.value === 'l'; })}>
             <option value="p">Portrait</option><option value="l">Landscape</option>
@@ -436,10 +466,11 @@ export function App() {
             <option value="imperial">mi / ft</option><option value="metric">km / m</option>
           </select>
         </Row>
+        </Group>
 
         <PagePanel project={p} />
 
-        <h2>North arrow</h2>
+        <Group id="north" title="North arrow">
         <Row label="Show"><input type="checkbox" checked={p.north.enabled} onChange={(e) => set((x) => { x.north.enabled = e.target.checked; })} /></Row>
         {p.north.enabled && (<>
           <Row label="Style">
@@ -458,8 +489,9 @@ export function App() {
           <Row label="Pen"><PenSelect pens={p.pens} value={p.north.pen} onChange={(id) => set((x) => { x.north.pen = id!; })} /></Row>
           <Row label="Line weight"><input type="range" min={0.1} max={1} step={0.05} value={p.north.weightMm} onChange={(e) => set((x) => { x.north.weightMm = +e.target.value; })} /></Row>
         </>)}
+        </Group>
 
-        <h2>Typography</h2>
+        <Group id="type" title="Typography">
         <Row label="Font">
           <select value={p.text.font} onChange={(e) => set((x) => { x.text.font = e.target.value as FontKey; })}>
             <option value="sans">Sans-serif</option><option value="serif">Serif</option>
@@ -537,7 +569,9 @@ export function App() {
           ))}
         </div>
 
-        <h2>Export</h2>
+        </Group>
+
+        <Group id="export" title="Export">
         <Row label="Watermark">
           <label><input type="checkbox" checked={p.showWatermark} onChange={(e) => set((x) => { x.showWatermark = e.target.checked; })} /> Include attribution</label>
         </Row>
@@ -595,10 +629,20 @@ export function App() {
           const s = pngSize(scene.widthMm, scene.heightMm, dpi);
           return <div className="hint">{s.width} × {s.height} px{s.capped ? ` (reduced to ${s.dpi} dpi, the largest this browser can render)` : ''}</div>;
         })()}
+        </Group>
+        </Groups>
       </aside>
-      <main className="stage">
-        <div className="sheet" ref={sheet} style={{ cursor: region ? 'grab' : undefined }} dangerouslySetInnerHTML={{ __html: previewSvg }} />
+      <main className="stage" id="preview" tabIndex={-1} hidden={narrow && tab !== 'map'} {...(narrow ? { role: 'tabpanel', 'aria-labelledby': 'tab-map' } : {})}>
+        <div className="sheet" ref={sheet} style={{ cursor: region ? 'grab' : undefined, ...sheetShape(scene) }} dangerouslySetInnerHTML={{ __html: previewSvg }} />
       </main>
     </div>
   );
+}
+
+/** The preview's outline for a coaster: the sheet itself is round or rounded, not just the paper drawn in it. */
+function sheetShape(scene: { widthMm: number; heightMm: number; shape?: { kind: 'circle' } | { kind: 'roundrect'; radiusMm: number } }) {
+  const sh = scene.shape;
+  if (!sh) return {};
+  const borderRadius = sh.kind === 'circle' ? '50%' : `${(sh.radiusMm / scene.widthMm) * 100}% / ${(sh.radiusMm / scene.heightMm) * 100}%`;
+  return { borderRadius, overflow: 'hidden' as const };
 }
