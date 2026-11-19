@@ -1,6 +1,6 @@
 import type { BBox } from '../geo/project';
 import { defaultFeatures, type FeatureSettings, type Landmark } from '../features/types';
-import { LAYER_KEYS, type LayerKey, type LayerStyle, type StrokeStyle } from '../city/types';
+import { DEFAULT_WATERLINES, LAYER_KEYS, type LayerKey, type LayerStyle, type StrokeStyle } from '../city/types';
 import { defaultPens, PEN_BLACK, PEN_BLUE, PEN_GREEN, type Pen } from './pens';
 import { defaultBorder, type BorderSettings } from './border';
 import type { HatchDensity } from './types';
@@ -205,7 +205,7 @@ export interface Project {
  */
 export const defaultLayers = (): Record<LayerKey, LayerStyle> => ({
   parks: { enabled: true, pen: PEN_GREEN, weightMm: 0.3, fill: 'light', style: 'solid' },
-  water: { enabled: true, pen: PEN_BLUE, weightMm: 0.3, fill: 'light', style: 'solid' },
+  water: { enabled: true, pen: PEN_BLUE, weightMm: 0.3, fill: 'light', style: 'solid', waterlines: { ...DEFAULT_WATERLINES } },
   buildings: { enabled: true, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'solid' },
   paths: { enabled: false, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'dashed' },
   minor: { enabled: true, pen: PEN_BLACK, weightMm: 0.3, fill: 'off', style: 'solid' },

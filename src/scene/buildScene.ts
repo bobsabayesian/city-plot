@@ -4,12 +4,13 @@ import { formatCoords, formatKm, formatMiles } from '../geo/format';
 import { layerPrims, waterLines, type MapClip } from '../city/draw';
 import { LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from '../city/types';
 import { landmarkPrims } from '../features/draw';
+import { boxAt } from '../features/select';
 import type { LandmarkEntry, LandmarkPlacement } from '../features/select';
 import { penKeyOf, type Landmark } from '../features/types';
-import { northPrims } from './north';
+import { northBox, northPrims } from './north';
 import { borderExtent, borderPrims, layoutBorder } from './border';
 import { featurePenId, penFor } from './pens';
-import type { Prim, Scene } from './types';
+import type { Part, Prim, Scene } from './types';
 import { clampMargins, posterMm, sizeShape, type InfoItem, type Placement, type Project, type Region } from './project';
 
 const PT = 25.4 / 72;
@@ -64,7 +65,9 @@ export function autoValues(p: Project, view?: View) {
   };
 }
 
-interface Block { height: number; gapAfter: number; draw: (yTop: number) => Prim[] }
+interface Block { part: Part; height: number; gapAfter: number; draw: (yTop: number) => Prim[] }
+/** Mark primitives with the part of the map they draw, so the preview can open that part's settings when clicked. */
+const tag = (part: Part) => (x: Prim): Prim => ({ ...x, part });
 
 export interface View {
   frame: Rect;
@@ -80,7 +83,7 @@ export interface Composed { scene: Scene; view?: View; landmarks?: LandmarkEntry
 
 const roundScale = (s: number) => { const q = s >= 2000 ? 100 : 10; return Math.max(1, Math.round(s / q) * q); };
 
-function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
+function compose(p: Project, layoutOnly = false, data?: CityData, moving = false): Composed {
   const { w: W, h: H } = posterMm(p);
   const prims: Prim[] = [];
   // The page margin is measured from the inside of the border (from the paper edge when there is none).
@@ -91,7 +94,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
   const t = p.text;
   const colorOf = (penId: string) => penFor(p.pens, penId).color;
   // the border goes first so it is drawn under everything else
-  if (!layoutOnly) prims.push(...borderPrims(W, H, p.border, colorOf(p.border.pen)));
+  if (!layoutOnly) prims.push(...borderPrims(W, H, p.border, colorOf(p.border.pen)).map(tag('border')));
   const fontFamily = FONTS[t.font];
   const anchor = t.align === 'left' ? 'start' : t.align === 'right' ? 'end' : 'middle';
   const contentL = mg.left;
@@ -121,7 +124,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     };
     const { x: titleX, ...place } = where;
     blocks[ts.placement].push({
-      height: size * 0.75, gapAfter: size * 0.4,
+      part: 'title', height: size * 0.75, gapAfter: size * 0.4,
       draw: (y) => {
         const base = y + size * 0.72;
         const outline = { ...place, mode: 'stroke' as const, strokeMm: ts.outlineMm };
@@ -131,7 +134,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
           text(ts.fillPen, title.toUpperCase(), base, size, { ...place, hatch: ts.fillDensity }, titleX),
           text(ts.pen, title.toUpperCase(), base, size, outline, titleX),
         ];
-        return [text(ts.pen, title.toUpperCase(), base, size, place, titleX)];
+        return [text(ts.pen, title.toUpperCase(), base, size, { ...place, plotFill: ts.fillDensity }, titleX)];
       },
     });
   }
@@ -142,6 +145,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     const size = t.location.sizePt * PT;
     const small = size * 0.75;
     blocks[t.location.placement].push({
+      part: 'location',
       height: (loc ? size * 0.75 : 0) + (loc && coords ? size * 0.5 : 0) + (coords ? small * 0.75 : 0),
       gapAfter: size * 0.8,
       draw: (y) => {
@@ -168,6 +172,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
       text(t.info.pen, it.value || infoAuto[it.key], y + ls * 1.5 + size * 0.72, size, { trackingMm: size * t.trackingEm * 0.6 }, x),
     ];
     blocks[t.info.placement].push({
+      part: 'info',
       height: column ? items.length * cell + (items.length - 1) * colGap : cell,
       gapAfter: size * 0.6,
       draw: (y) => {
@@ -184,19 +189,19 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
   // Stack the blocks from the top and bottom margins; they are drawn once the map frame is known.
   const queue: (() => Prim[])[] = [];
   let topCursor = mg.top;
-  for (const b of blocks.top) { const y = topCursor; queue.push(() => b.draw(y)); topCursor += b.height + b.gapAfter; }
+  for (const b of blocks.top) { const y = topCursor; queue.push(() => b.draw(y).map(tag(b.part))); topCursor += b.height + b.gapAfter; }
 
   let bottomCursor = H - mg.bottom;
   if (p.showWatermark) {
     const size = 7 * PT;
     const y = bottomCursor;
-    queue.push(() => [text(p.watermarkPen, WATERMARK_TEXT, y, size, { trackingMm: size * 0.04, opacity: 0.55 })]);
+    queue.push(() => [tag('watermark')(text(p.watermarkPen, WATERMARK_TEXT, y, size, { trackingMm: size * 0.04, opacity: 0.55 }))]);
     bottomCursor -= size * 2.4;
   }
   for (const b of [...blocks.bottom].reverse()) {
     bottomCursor -= b.height;
     const y = bottomCursor;
-    queue.push(() => b.draw(y));
+    queue.push(() => b.draw(y).map(tag(b.part)));
     bottomCursor -= b.gapAfter;
   }
 
@@ -255,34 +260,50 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
     }
     const inClip = clip ? (x: number, y: number) => pointInConvex(x, y, clip!.poly) : undefined;
 
-    // the map layers, bottom first; a layer is skipped when the view is wider than it is made for
-    for (const key of LAYER_KEYS) {
-      const style = p.layers[key];
-      const layer = data?.layers[key];
-      if (!style.enabled || !layer || widest > LAYER_MAX_KM[key]) continue;
-      prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame, clip));
-    }
-
-    if (p.north.enabled) {
-      prims.push(...northPrims(northFrame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }));
-    }
-
+    // Landmark labels are placed first: they keep clear of the north arrow, and the map lines are cut away around them.
+    let placed: ReturnType<typeof landmarkPrims> | undefined;
     if (p.features.enabled) {
       const sizeMm = p.features.sizePt * PT;
-      const out = landmarkPrims({
+      const arrow = p.north.enabled ? northBox(northFrame, p.north.corner, p.north.sizeMm) : undefined;
+      placed = landmarkPrims({
         landmarks: [...p.custom, ...(data?.landmarks ?? [])],
         water: p.features.waterLabels && p.layers.water.enabled && widest <= LAYER_MAX_KM.water ? waterLines(data?.layers.water) : [],
+        waterNames: p.features.waterLabels && p.layers.water.enabled && widest <= LAYER_MAX_KM.water ? data?.layers.water?.waterNames : undefined,
         fit, frame, route: [],
+        obstacles: arrow ? [boxAt(arrow.x, arrow.y, arrow.x + p.north.sizeMm, arrow.y + p.north.sizeMm)] : [],
         labelBounds: withinBorder({ x: frame.x - mg.left * 0.5, y: frame.y - mg.top * 0.5, w: frame.w + (mg.left + mg.right) * 0.5, h: frame.h + mg.top * 0.5 }),
         settings: p.features, sizeMm, inside: inClip,
         markerR: Math.min(W, H) * 0.0045,
         penFor: (kind) => penFor(p.pens, featurePenId(p.features, penKeyOf(kind))),
         fontFamily, fontKey: t.font, trackingMm: sizeMm * 0.05,
       });
-      prims.push(...out.prims);
-      landmarks = out.entries;
-      pool = out.pool;
-      open = out.open;
+    }
+
+    // the map lines are also cut away under the north arrow, so it sits on clear paper like a label does
+    const halos = [...(placed?.halos ?? [])];
+    if (p.north.enabled) {
+      const s = p.north.sizeMm;
+      const at = northBox(northFrame, p.north.corner, s);
+      halos.push({ box: { cx: at.x + s / 2, cy: at.y + s / 2, w: s, h: s, ang: ((p.region?.rotationDeg ?? 0) * Math.PI) / 180 }, r: 1, fills: true });
+    }
+
+    // the map layers, bottom first; a layer is skipped when the view is wider than it is made for
+    for (const key of LAYER_KEYS) {
+      const style = p.layers[key];
+      const layer = data?.layers[key];
+      if (!style.enabled || !layer || widest > LAYER_MAX_KM[key]) continue;
+      prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame, clip, halos, moving));
+    }
+
+    if (p.north.enabled) {
+      prims.push(...northPrims(northFrame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }).map((x) => ({ ...x, part: 'north' as const })));
+    }
+
+    if (placed) {
+      prims.push(...placed.prims);
+      landmarks = placed.entries;
+      pool = placed.pool;
+      open = placed.open;
     }
   }
 
@@ -291,7 +312,8 @@ function compose(p: Project, layoutOnly = false, data?: CityData): Composed {
   return { scene: { widthMm: W, heightMm: H, paper: p.paper, ...(shape ? { shape } : {}), prims }, view, landmarks, pool, open };
 }
 
-export const composeScene = (p: Project, data?: CityData): Composed => compose(p, false, data);
+/** `moving`: the map is being dragged, zoomed or turned; slow extras (waterlines) are left out until it rests. */
+export const composeScene = (p: Project, data?: CityData, moving = false): Composed => compose(p, false, data, moving);
 export const buildScene = (p: Project, data?: CityData): Scene => compose(p, false, data).scene;
 
 /** The geographic area the map frame shows; data must cover this. Cheap (no map drawing). */

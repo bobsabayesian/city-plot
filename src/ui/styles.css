@@ -6,14 +6,16 @@ html { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
 [hidden] { display: none !important; }
 
-.app { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
+.app { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: minmax(0, 1fr) auto; height: 100vh; }
+.notice { grid-column: 1 / -1; }
 .panel { overflow: auto; padding: 16px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .panel h1 { font-size: 17px; margin: 0; }
 .about-link { margin: -6px 0 0; font-size: 13px; color: var(--muted); }
-.stage { display: flex; align-items: center; justify-content: center; padding: 16px; overflow: auto; min-width: 0; }
-.stage:focus { outline: none; }
+.main { display: flex; flex-direction: column; padding: 0 16px 16px; overflow: auto; min-width: 0; }
+.main:focus { outline: none; }
+.stage { display: flex; flex: 1; align-items: center; justify-content: center; min-height: 0; }
 .sheet { box-shadow: 0 1px 8px #0004; max-height: 100%; max-width: 100%; line-height: 0; touch-action: none; }
-.sheet svg { display: block; max-width: 100%; max-height: calc(100vh - 32px); height: auto; width: auto; }
+.sheet svg { display: block; max-width: 100%; max-height: calc(100vh - 100px); height: auto; width: auto; }
 .sheet.dragging { cursor: grabbing !important; user-select: none; }
 
 /* groups of settings that open and close */
@@ -79,10 +81,100 @@ select:hover, input:hover:not([type=range]):not([type=checkbox]) { border-color:
 .tab.active, .tab.active:hover:not(:disabled) { border-bottom-color: var(--accent); }
 .tab:not(.active):hover:not(:disabled) { border-bottom-color: var(--line); }
 .app.narrow { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
-.app.narrow .panel, .app.narrow .stage { flex: 1 1 0; min-height: 0; border-right: 0; overflow: auto; }
-.app.narrow .stage { padding: 12px; }
+.app.narrow .panel, .app.narrow .main { flex: 1 1 0; min-height: 0; border-right: 0; overflow: auto; }
+.app.narrow .main { padding: 0 12px 12px; }
 .app.narrow .sheet svg { max-height: none; max-width: 100%; }
 @media (max-width: 800px) {
   .row input[type=number], .row input[type=text], select, .penrow input, .lm input, .lm select { font-size: 16px; } /* 16px stops iPhones zooming into a field */
   .row > label { flex-basis: 92px; }
 }
+
+/* pens and paper */
+.swatches { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.swatches .chip { width: 20px; height: 20px; padding: 0; border-radius: 4px; border: 1px solid var(--line); cursor: pointer; }
+.swatches .chip.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.hint.warn { color: var(--error); }
+button.link { border: 0; padding: 0; background: none; color: var(--accent); text-decoration: underline; font-size: inherit; min-height: 0; }
+button.link:hover:not(:disabled) { background: none; }
+.assign .row { margin: 4px 0; }
+.assign .part { flex: 0 0 118px; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assign .warn { margin: 0; font-weight: 700; }
+
+/* group headers with an on/off switch */
+/* --- groups of settings that open and close --- */
+.group { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); scroll-margin-top: 4px; }
+.group-head { display: flex; align-items: center; gap: 6px; padding-right: 10px; }
+.group-title { margin: 0; font-size: 14px; flex: 1; min-width: 0; }
+.group-status { margin: 0; white-space: nowrap; }
+/* a group whose part of the poster is turned off: its title fades, its switch stays clear */
+.group.off .group-title button > span:not(.chevron) { opacity: .5; }
+.off-note { margin: 0; }
+/* the on/off switch in a group's header: a real checkbox (role=switch) drawn as a sliding track */
+.switch { position: relative; display: inline-flex; flex: none; width: 34px; height: 20px; cursor: pointer; }
+.switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.switch .track { width: 100%; height: 100%; border-radius: 10px; background: color-mix(in srgb, var(--fg) 22%, var(--panel)); transition: background-color .12s; }
+.switch .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0005; transition: transform .12s; }
+.switch input:checked + .track { background: var(--accent); }
+.switch input:checked + .track::after { transform: translateX(14px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .switch .track, .switch .track::after { transition: none; } }
+@media (max-width: 800px) { .switch { width: 42px; height: 26px; } .switch .track { border-radius: 13px; } .switch .track::after { width: 22px; height: 22px; } .switch input:checked + .track::after { transform: translateX(16px); } }
+
+.group.off .group-title button { opacity: .6; }
+
+/* the action bar above the map: preview switch, save and downloads */
+.actionbar { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 0 8px; margin-bottom: 8px; width: 100%; }
+.bar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.bar-status { margin: 0; flex: 1 1 auto; }
+.bar-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.actionbar > .err, .actionbar > .hint { margin: 6px 0 0; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 4px 12px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on, .seg button.on:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 16%, var(--panel)); color: var(--fg); font-weight: 600; }
+.sheet svg text[data-lm], .sheet svg [data-part] { cursor: pointer; }
+.sheet svg text[data-lm]:hover { text-decoration: underline; }
+.lm input[type=text]:focus { outline: 2px solid var(--accent); }
+.code { font-family: ui-monospace, monospace; letter-spacing: .08em; font-size: 15px; }
+
+/* the start screen: nothing chosen yet */
+.app.empty { grid-template-columns: 1fr; }
+.app.empty .start { align-self: start; }
+.start { overflow: auto; padding: 48px 16px; width: 100%; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.start h1 { font-size: 26px; margin: 0; }
+.start .lede { margin: 0; opacity: .75; font-size: 15px; }
+.choice { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 14px 16px; }
+.choice h2 { font-size: 15px; margin: 0 0 10px; }
+.start-more { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.start-more .open { display: flex; flex-direction: column; min-width: min(320px, 100%); }
+.start-more .open .hint { margin: 0; }
+.notice { padding: 6px 16px; border-top: 1px solid var(--line); font-size: 12px; opacity: .7; background: var(--panel); }
+.notice a { color: var(--accent); }
+.hidden-lms { margin: 8px 0; }
+.hidden-lm { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; margin: 3px 0; }
+.hidden-lm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lm2 { display: grid; grid-template-columns: 20px 1fr; gap: 4px 6px; margin: 8px 0; align-items: center; }
+.lm2 .name { grid-column: 2; }
+.lm2 .opts { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; }
+.lm2 input[type=text], .lm2 select, .lm2 input[type=number] { min-width: 0; padding: 4px; border: 1px solid var(--line); border-radius: 4px; }
+.lm2 input[type=text] { width: 100%; }
+.lm2 .opts select { flex: 1 1 70px; }
+.lm2 .opts input[type=number] { width: 64px; }
+.app.narrow .actionbar { padding-top: 6px; }
+.app.narrow .stage { align-items: flex-start; }
+.app.narrow .notice { flex: none; }
+
+/* looks: a grid of small cards, each with a sketch in the look's own paper and inks */
+.looks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 6px 0; }
+.look { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 6px; text-align: left; min-width: 0; }
+.look svg { width: 100%; height: auto; border-radius: 3px; box-shadow: 0 0 0 1px var(--line); }
+.look b { font-size: 13px; }
+.look span { color: var(--muted); font-size: 11px; line-height: 1.3; }
+
+/* watching the plot: canvases laid over the sheet, and a small control bar floating at the bottom of the stage */
+.stage { position: relative; }
+.plot-canvas { position: absolute; pointer-events: none; }
+.player { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.player input[type=range] { flex: 1 1 160px; min-width: 120px; }
+.player .clock { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
+.player-status { margin: 0; white-space: nowrap; min-width: 10em; }

@@ -1,9 +1,11 @@
 import { clipPolygon, clipPolygonConvex, clipPolyline, clipPolylineConvex, pointInRing, simplifyXY, type Rect, type XY } from '../geo/clip';
 import type { BBox, Fit } from '../geo/project';
 import { effectiveWidth } from '../export/offset';
-import type { Pen } from '../scene/pens';
+import { inkWidth, type Pen } from '../scene/pens';
 import type { HatchDensity, PathPrim } from '../scene/types';
 import type { WaterLine } from '../features/types';
+import { cutOutHalos, cutRingOutOfHalos, type Halo } from '../features/halo';
+import { clipWaterlines, waterlinesFor } from './waterlines';
 import { isAreaLayer, type LayerData, type LayerKey, type LayerStyle, type StrokeStyle, type Way } from './types';
 
 const f = (n: number) => +n.toFixed(2);
@@ -57,10 +59,13 @@ function withoutCoveredLines(lines: { sub?: string; pts: XY[] }[], rings: XY[][]
 /** A shape the map is cut to (a coaster): a convex polygon inside the frame, and a rectangle known to be inside it. */
 export interface MapClip { poly: XY[]; safe: Rect }
 
-export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: LayerData, fit: Fit, frame: Rect, clip?: MapClip): PathPrim[] {
+/** `moving`: the view is being dragged or zoomed, so slow extras (waterlines) wait until it rests. */
+export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: LayerData, fit: Fit, frame: Rect, clip?: MapClip, halos: Halo[] = [], moving = false): PathPrim[] {
   const prims: PathPrim[] = [];
   const lines: { sub?: string; pts: XY[] }[] = [];
   const rings: XY[][] = [];
+  /** rings that are only filled: an area cut by a map tile's edge, whose outline is drawn as open lines */
+  const fillOnly: XY[][] = [];
   for (const w of data.ways) {
     const mm = toMm(w, fit);
     if (mm.length < 2) continue;
@@ -68,15 +73,16 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
     if (!touches(b, frame)) continue;
     if (w.closed) {
       if (Math.max(b.x1 - b.x0, b.y1 - b.y0) < MIN_RING_MM) continue;
-      rings.push(mm);
+      (w.fill ? fillOnly : rings).push(mm);
     } else lines.push({ sub: w.sub, pts: mm });
   }
 
-  const kept = key === 'water' ? withoutCoveredLines(lines, rings) : lines;
+  const kept = key === 'water' ? withoutCoveredLines(lines, [...rings, ...fillOnly]) : lines;
   const d: string[] = [];
   const stroke = (pts: XY[]) => {
     const simple = simplifyXY(pts, SIMPLIFY_MM);
-    for (const piece of clip ? clipPolylineConvex(simple, clip.poly, clip.safe) : clipPolyline(simple, frame)) {
+    // lines are cut away around placed labels, so a name has clear paper to be read on
+    for (const piece of cutOutHalos(clip ? clipPolylineConvex(simple, clip.poly, clip.safe) : clipPolyline(simple, frame), halos)) {
       const first = piece[0]!;
       const last = piece[piece.length - 1]!;
       d.push(sub(piece, piece.length > 3 && first[0] === last[0] && first[1] === last[1]));
@@ -84,14 +90,25 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
   };
   for (const l of kept) stroke(l.pts);
   for (const r of rings) stroke(r);
-  const width = effectiveWidth(style.weightMm, pen.tipMm);
+  const width = effectiveWidth(style.weightMm, inkWidth(pen));
   if (d.length) {
-    prims.push({ kind: 'path', d: d.join(''), color: pen.color, pen: pen.id, mode: 'stroke', widthMm: width, round: true, ...dashFor(style.style, width) });
+    prims.push({ kind: 'path', part: key, d: d.join(''), color: pen.color, pen: pen.id, mode: 'stroke', widthMm: width, round: true, ...dashFor(style.style, width) });
   }
 
-  if (isAreaLayer(key) && style.fill !== 'off' && rings.length) {
-    const fill = rings.map((r) => (clip ? clipPolygonConvex(simplifyXY(r, SIMPLIFY_MM), clip.poly) : clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame))).filter((r) => r.length >= 3).map((r) => sub(r, true));
-    if (fill.length) prims.unshift({ kind: 'path', d: fill.join(''), color: pen.color, pen: pen.id, mode: 'fill', opacity: FILL_OPACITY[style.fill], hatch: style.fill });
+  if (key === 'water' && style.waterlines && style.waterlines.count > 0) {
+    // one pass of the pen: they are meant to be fine lines, whatever the shore's own thickness
+    const traced = waterlinesFor(data, fit, frame, style.waterlines, moving);
+    const lines = traced ? cutOutHalos(clipWaterlines(traced, frame, clip), halos) : [];
+    if (lines.length) prims.push({ kind: 'path', part: key, d: lines.map((l) => sub(l, false)).join(''), color: pen.color, pen: pen.id, mode: 'stroke', widthMm: effectiveWidth(0, inkWidth(pen)), round: true });
+  }
+
+  if (isAreaLayer(key) && style.fill !== 'off' && (rings.length || fillOnly.length)) {
+    const fill = [...rings, ...fillOnly]
+      .map((r) => (clip ? clipPolygonConvex(simplifyXY(r, SIMPLIFY_MM), clip.poly) : clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame)))
+      .filter((r) => r.length >= 3)
+      .flatMap((r) => cutRingOutOfHalos(r, halos))
+      .map((r) => sub(r, true));
+    if (fill.length) prims.unshift({ kind: 'path', part: key, d: fill.join(''), color: pen.color, pen: pen.id, mode: 'fill', opacity: FILL_OPACITY[style.fill], hatch: style.fill });
   }
   return prims;
 }

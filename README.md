@@ -6,10 +6,40 @@ Pick a city or landmark, set how much ground the map covers, and style it for a 
 - **Pens**: you define the pens (default: black, green and blue isographs, 0.3 mm). Every map layer, label and text block picks one.
 - **Passes**: a layer's thickness is drawn as whole passes of its pen, overlapping by 20%. N passes draw `tip + (N-1) * 0.8 * tip` (0.3, 0.54, 0.78, 1.02 mm for a 0.3 mm pen). The style panel shows the pass count next to each thickness.
 - **Layers**: parks, water, buildings, footpaths, minor/secondary/major streets, railways. Each has a pen, thickness, line style and (for areas) hatch fill. Layers switch off when the view is wider than they are made for (buildings 4 km, footpaths 6 km, minor streets 12 km, ...).
+- **Waterlines**: water can have lines that follow the shore out into it, like an engraved chart (count, first gap, and how much
+  each gap widens). They are contours of the distance from land on a fine grid (`src/city/waterlines.ts`), drawn in one pass of
+  the water pen, and are traced once the view stops moving.
+- **Looks**: Classic, Engraved chart, Blueprint, Nolli, Minimal and Kraft set the paper, pens, layers, type, border and
+  north arrow in one click (`src/scene/looks.ts`), keeping the place, area, page and text; Undo is offered until the next change.
+  The north arrow sits on clear paper: map lines and hatching are cut away under it.
+- **Plot time**: the Plotter preview estimates how long the plot takes (pens in palette order, lines sorted to keep pen-up
+  travel short, as plotting software does; `src/export/plan.ts`) and **Watch it plot** plays it back: the ink appears in plot
+  order, with the pen moving between lines and pausing to swap pens. Plotter speeds are set under Export and kept in the browser.
 - **Landmarks**: attractions, museums, historic sites, stations, etc. from OpenStreetMap, plus your own ("home") from an address or coordinates.
-- **Export**: SVG (one layer per pen and width; plotter mode splits thick lines into passes and hatches fills) and PNG.
+- **Export**: SVG (plotter mode: one layer per pen, named after it, thick lines as passes, fills hatched, small text as single strokes) and PNG. A **Plotter** preview shows the map as the pens will draw it (ink width, translucency, overlap).
+- **Pens**: pen kinds (technical/isograph, Micron, gel, marker) with ink spread, a saved-pen library, paper swatches with a low-contrast warning, and a table of which pen draws what.
+- **Editing**: click any part of the map to open its settings; landmarks have their own markers, clear paper around labels, and a Hidden list.
+
+## Where the data comes from
+
+- **Streets, buildings, water, parks, railways:** OpenStreetMap data served as vector tiles by [OpenFreeMap](https://openfreemap.org)
+  (OpenMapTiles schema), read in the user's browser (`src/city/tiles.ts`). Tiles are static files, so a view loads in a second or
+  two. If the tiles cannot be fetched, each layer comes from an Overpass query through the Worker instead (`worker/api.ts`).
+- **Landmarks (attractions, museums, stations…):** one small Overpass lookup through the Worker, because it also says which
+  places have a Wikidata entry (used to rank them). **Place search:** Nominatim, through the Worker.
+- OpenFreeMap's terms do not allow automated data collection, so tiles are fetched only from the user's browser (never from the
+  Worker), at most four at a time, and a view is limited to about 150 tiles (a wider view uses a lower zoom).
+- `test/fixtures/tiles/` holds three real downtown Seattle tiles (OpenStreetMap contributors, ODbL) so the decoder is tested
+  without a network.
 
 Map data © OpenStreetMap contributors.
+
+## Saving and sharing
+
+- **Save** (above the map) keeps the whole map under an 8-character code in the `project-files` bucket (`city/`), and `?p=code`
+  reopens it. A browser that saved a project can **Save over** it (it holds an edit key; only a hash is stored).
+- **Copy 1-hour link** puts the current SVG on the server and copies a link that works for an hour.
+- Every export also lands in the bucket under `city-plot/<session>/`, with the settings beside it.
 
 ```bash
 npm install

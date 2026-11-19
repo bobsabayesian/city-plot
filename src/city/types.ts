@@ -1,5 +1,6 @@
 import type { BBox } from '../geo/project';
 import type { HatchDensity } from '../scene/types';
+import type { WaterName } from '../features/types';
 
 /** The map layers, bottom of the drawing first. */
 export const LAYER_KEYS = ['parks', 'water', 'buildings', 'paths', 'minor', 'secondary', 'major', 'rail'] as const;
@@ -42,7 +43,13 @@ export interface LayerStyle {
   /** area layers: hatch the inside (plotter) / tint it (print) */
   fill: 'off' | HatchDensity;
   style: StrokeStyle;
+  /** water only: lines that follow the shore out into the water (see city/waterlines) */
+  waterlines?: WaterlineStyle;
 }
+
+/** Waterlines, like an engraved chart: `count` lines, the first `gapMm` from the shore, each gap `widen` (0.25 = 25%) wider than the last. */
+export interface WaterlineStyle { count: number; gapMm: number; widen: number }
+export const DEFAULT_WATERLINES: WaterlineStyle = { count: 0, gapMm: 1.2, widen: 0.25 };
 
 /** One way from OpenStreetMap: a line or a ring, as flat [lat, lon, lat, lon, …]. */
 export interface Way {
@@ -52,6 +59,8 @@ export interface Way {
   sub?: string;
   closed: boolean;
   pts: number[];
+  /** a ring that is only filled, never outlined: the part of an area cut by a map tile's edge (its outline is drawn as open lines) */
+  fill?: true;
 }
 
 export interface LayerData {
@@ -60,6 +69,10 @@ export interface LayerData {
   ways: Way[];
   /** the server could not return everything (e.g. it hit its size limit) */
   truncated?: boolean;
+  /** where it came from: the map tiles (fast) or an Overpass query (the fallback) */
+  source?: 'tiles' | 'overpass';
+  /** the water layer's lake names, which the tiles give as points */
+  waterNames?: WaterName[];
 }
 
 /** The area, in degrees, that a request is rounded outward to so nearby views share a cached answer. */
