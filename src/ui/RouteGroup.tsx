@@ -1,9 +1,13 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Group } from './Group';
 import { PenSelect } from './PensPanel';
 import { routeStops, type RouteStyle } from '../features/route';
 import { addPhotos, addPhotoStop, byTime, photoStopName, routeRegion, type PhotoIn } from '../features/photoStops';
 import { readPhotoInfo } from '../photos';
+import { collectDrop, dropLink, openDrop, qrSvg } from '../drop';
+
+/** How often the computer looks for photos sent from the phone. */
+export const DROP_POLL_MS = 3000;
 import type { BBox } from '../geo/project';
 import { useStore } from '../store';
 
@@ -25,39 +29,78 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
   const [unplaced, setUnplaced] = useState<{ key: string; ph: PhotoIn; url: string }[]>([]);
   const fit = () => { const r = routeRegion(routeStops(useStore.getState().project.route, useStore.getState().project.custom)); if (r) setRegion(r); };
 
+  /** Put photos on the route (from this device's picker, or sent from a phone), with their thumbnails. */
+  const ingest = (items: { ph: PhotoIn; url?: string }[]) => {
+    let result: ReturnType<typeof addPhotos> | undefined;
+    set((x) => { result = addPhotos(x, items.map((i) => i.ph)); });
+    const r = result!;
+    const urlFor = (ph: PhotoIn) => items.find((i) => i.ph === ph)?.url ?? '';
+    // thumbnails for the new stops, matched by place (addPhotos took them oldest first)
+    const placed = items.map((i) => i.ph).filter((ph) => ph.info.lat !== undefined).sort(byTime);
+    const now = useStore.getState().project;
+    for (const id of r.added) {
+      const c = now.custom.find((q) => q.id === id);
+      const ph = placed.find((q) => q.info.lat === c?.lat && q.info.lon === c?.lon);
+      if (ph && urlFor(ph)) thumbs.set(id, urlFor(ph));
+    }
+    setUnplaced((u) => [...u, ...r.unplaced.map((ph, i) => ({ key: `${Date.now()}-${i}-${ph.file}`, ph, url: urlFor(ph) }))]);
+    const n = items.length;
+    const parts = [
+      r.added.length ? `Added ${r.added.length} ${r.added.length === 1 ? 'stop' : 'stops'} from ${n} ${n === 1 ? 'photo' : 'photos'}` : `No new stops from ${n} ${n === 1 ? 'photo' : 'photos'}`,
+      r.merged ? `${r.merged} taken where a stop already is that day` : '',
+      r.unplaced.length ? `${r.unplaced.length} without a location (below)` : '',
+    ].filter(Boolean);
+    setMsg(parts.join(' · ') + '.');
+    // bring new stops into view
+    if (r.added.some((id) => { const c = now.custom.find((q) => q.id === id); return c && !inView(bbox, c); })) fit();
+  };
+
   const fromPhotos = async (files: FileList | null) => {
     if (!files?.length) return;
     setReading(true);
     setMsg('');
     try {
-      const list = [...files];
-      const read = await Promise.all(list.map(async (f) => ({ f, ph: { file: f.name, info: readPhotoInfo(await f.arrayBuffer()) } })));
-      let result: ReturnType<typeof addPhotos> | undefined;
-      set((x) => { result = addPhotos(x, read.map((r) => r.ph)); });
-      const r = result!;
-      const urlFor = (ph: PhotoIn) => { const f = read.find((x) => x.ph === ph)?.f; return f ? URL.createObjectURL(f) : ''; };
-      // thumbnails for the new stops, matched by the order addPhotos used (oldest first)
-      const placedPhotos = read.map((x) => x.ph).filter((ph) => ph.info.lat !== undefined).sort(byTime);
-      const now = useStore.getState().project;
-      for (const id of r.added) {
-        const c = now.custom.find((q) => q.id === id);
-        const ph = placedPhotos.find((q) => q.info.lat === c?.lat && q.info.lon === c?.lon);
-        if (ph) thumbs.set(id, urlFor(ph));
-      }
-      setUnplaced((u) => [...u, ...r.unplaced.map((ph, i) => ({ key: `${Date.now()}-${i}-${ph.file}`, ph, url: urlFor(ph) }))]);
-      const parts = [
-        r.added.length ? `Added ${r.added.length} ${r.added.length === 1 ? 'stop' : 'stops'} from ${list.length} ${list.length === 1 ? 'photo' : 'photos'}` : `No new stops from ${list.length} ${list.length === 1 ? 'photo' : 'photos'}`,
-        r.merged ? `${r.merged} taken where a stop already is that day` : '',
-        r.unplaced.length ? `${r.unplaced.length} without a location (below)` : '',
-      ].filter(Boolean);
-      setMsg(parts.join(' · ') + '.');
-      // bring new stops into view
-      if (r.added.some((id) => { const c = now.custom.find((q) => q.id === id); return c && !inView(bbox, c); })) fit();
+      const read = await Promise.all([...files].map(async (f) => ({ ph: { file: f.name, info: readPhotoInfo(await f.arrayBuffer()) }, url: URL.createObjectURL(f) })));
+      ingest(read);
     } finally {
       setReading(false);
       if (picker.current) picker.current.value = '';
     }
   };
+
+  // ---- photos sent from a phone: a QR code of a drop box's link, and what arrives in it, collected every few seconds
+  const [phone, setPhone] = useState<{ token: string; link: string; svg: string; expiresAt: number; received: number } | null>(null);
+  const [phoneErr, setPhoneErr] = useState('');
+  const startPhone = async () => {
+    setPhoneErr('');
+    try {
+      const { token, expiresAt } = await openDrop();
+      const link = dropLink(token);
+      setPhone({ token, link, svg: await qrSvg(link), expiresAt, received: 0 });
+    } catch (e) { setPhoneErr(e instanceof Error ? e.message : 'Could not open the link for your phone'); }
+  };
+  const ingestRef = useRef(ingest);
+  ingestRef.current = ingest;
+  const token = phone?.token;
+  useEffect(() => {
+    if (!token) return;
+    let live = true;
+    const tick = async () => {
+      try {
+        const { photos } = await collectDrop(token);
+        if (!live || !photos.length) return;
+        ingestRef.current(photos.map((d) => ({ ph: { file: d.file, info: d.info }, url: d.thumb })));
+        setPhone((ph) => (ph && ph.token === token ? { ...ph, received: ph.received + photos.length } : ph));
+      } catch (e) {
+        if (!live) return;
+        setPhoneErr(e instanceof Error ? e.message : 'Lost the link to your phone');
+        setPhone(null);
+      }
+    };
+    const t = setInterval(() => void tick(), DROP_POLL_MS);
+    return () => { live = false; clearInterval(t); };
+  }, [token]);
+
   const r = p.route;
   const stops = routeStops(r, p.custom);
   const free = p.custom.filter((c) => !r.stops.includes(c.id));
@@ -77,7 +120,24 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
         <button type="button" className="primary" disabled={reading} onClick={() => picker.current?.click()}>{reading ? 'Reading photos…' : 'Add from photos'}</button>
         {stops.length > 1 && <button type="button" onClick={fit} title="Move and zoom the map to show every stop">Fit map to route</button>}
         <input ref={picker} type="file" accept="image/*,.heic,.heif" multiple hidden onChange={(e) => void fromPhotos(e.target.files)} />
+        {!phone && <button type="button" onClick={() => void startPhone()} title="Show a QR code to send photos from your phone">From your phone</button>}
       </div>
+      {phoneErr && <div className="err">{phoneErr}</div>}
+      {phone && (
+        <div className="field qr">
+          <div className="code" dangerouslySetInnerHTML={{ __html: phone.svg }} />
+          <div className="about">
+            <b>Scan with your phone's camera</b>
+            <span className="hint" style={{ margin: 0 }}>
+              Pick photos there and they'll appear here: their locations, dates and small previews, not the photos themselves. {phone.received
+                ? `${phone.received} ${phone.received === 1 ? 'photo' : 'photos'} so far.`
+                : 'Waiting for photos…'} The code works until {new Date(phone.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.
+            </span>
+            <input type="text" readOnly value={phone.link} aria-label="Link for your phone" onFocus={(e) => e.target.select()} />
+            <div className="row" style={{ margin: 0 }}><button type="button" onClick={() => setPhone(null)}>Done</button></div>
+          </div>
+        </div>
+      )}
       <div className="hint">Each photo's location and date are read on this device; the photos are never uploaded. Stops go in the order the photos were taken.</div>
       {msg && <div className="hint" role="status">{msg}</div>}
       {unplaced.length > 0 && (

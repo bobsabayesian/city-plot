@@ -219,3 +219,72 @@ describe('memory route from photos', () => {
     expect(group.textContent).not.toContain('Place on map');
   });
 });
+
+describe('photos from a phone, by QR code', () => {
+  const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
+  /** the real Worker handler behind fetch, with a bucket in memory */
+  const serve = async () => {
+    const { handleDrop } = await import('../worker/drop');
+    const { memoryBucket } = await import('../worker/memoryBucket');
+    const bucket = memoryBucket();
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (await handleDrop(new Request(new URL(url, 'https://city.example'), init), bucket)) ?? new Response('{}', { status: 404 })));
+  };
+
+  it('the computer shows a QR code for its link, and photos sent to it become stops', async () => {
+    await serve();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      await show(cityProject());
+      await click([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Memory route') && b.getAttribute('aria-expanded') !== null));
+      const group = host.querySelector('#group-route')!;
+      await click(group.querySelector('[role="switch"]'));
+      await click([...group.querySelectorAll('button')].find((b) => b.textContent === 'From your phone'));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(group.querySelector('.qr svg')).not.toBeNull();
+      const link = (group.querySelector('[aria-label="Link for your phone"]') as HTMLInputElement).value;
+      const token = new URL(link).searchParams.get('drop')!;
+      expect(token).toMatch(/^[2-9a-hjkmnp-z]{16}$/);
+      expect(group.textContent).toContain('Waiting for photos');
+
+      // the phone sends two photos; the next look at the box brings them in
+      await fetch(`/api/drop/${token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ photos: [
+        { file: 'a.jpg', info: { lat: 47.62, lon: -122.35, takenAt: '2014-06-21T15:00:00' }, thumb: 'data:image/jpeg;base64,/9j/' },
+        { file: 'b.jpg', info: { takenAt: '2015-01-01T10:00:00' } },
+      ] }) });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      const p = useStore.getState().project;
+      expect(routeStops(p.route, p.custom).map((s) => s.name)).toEqual(['21 Jun 2014']);
+      expect(group.textContent).toContain('2 photos so far');
+      expect(group.textContent).toContain('1 without a location');
+      expect((group.querySelector('img.thumb') as HTMLImageElement).src).toContain('data:image/jpeg');
+
+      await click([...group.querySelectorAll('button')].find((b) => b.textContent === 'Done'));
+      expect(group.querySelector('.qr')).toBeNull();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the phone page reads the photos and sends their locations and dates, in batches, never the files', async () => {
+    const sent: { photos: Record<string, unknown>[] }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init!.body)));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }));
+    const { PhoneDrop } = await import('../src/ui/PhoneDrop');
+    await act(async () => { root.render(createElement(PhoneDrop, { token: 'abcdefghjkmnpqrs' })); });
+    expect(text()).toContain('Send photos to City Plot');
+    const { readFileSync } = await import('node:fs');
+    const needle = readFileSync('test/fixtures/photos/needle.jpg');
+    const stripped = readFileSync('test/fixtures/photos/no-gps.jpg');
+    const files = [...Array.from({ length: 22 }, (_, i) => new File([needle], `IMG_${i}.jpg`, { type: 'image/jpeg' })), new File([stripped], 'IMG_x.jpg', { type: 'image/jpeg' })];
+    const input = host.querySelector('input[type=file]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(sent.map((b) => b.photos.length)).toEqual([20, 3]);
+    const first = sent[0]!.photos[0]!;
+    expect(Object.keys(first).sort()).toEqual(['file', 'info']); // no thumbnail where the browser cannot draw one, and never the file itself
+    expect(first.info).toMatchObject({ takenAt: '2014-06-21T15:42:07' });
+    expect(text()).toContain('Sent 23 photos to your computer; 1 without a location');
+  });
+});
