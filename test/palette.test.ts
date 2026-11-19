@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addPen, defaultPens, featurePenId, mapPenRefs, MAX_PENS, penFor, penUsage, removePen } from '../src/scene/pens';
+import { addPen, defaultPens, inkWidth, featurePenId, mapPenRefs, MAX_PENS, penFor, penUsage, removePen } from '../src/scene/pens';
 import { defaultProject, type Project } from '../src/scene/project';
 import { buildScene } from '../src/scene/buildScene';
 import { prepareScene, tipFor, type FontSet } from '../src/export/outlines';
@@ -20,11 +20,13 @@ const colorsOf = (ps: Prim[]) => new Set(ps.map((x) => x.color));
 
 describe('the palette', () => {
   it('starts with black, green and blue isograph pens, all 0.3 mm', () => {
-    expect(defaultPens()).toEqual([
-      { id: 'black', name: 'Black', color: BLACK, tipMm: 0.3 },
-      { id: 'green', name: 'Green', color: GREEN, tipMm: 0.3 },
-      { id: 'blue', name: 'Blue', color: BLUE, tipMm: 0.3 },
+    expect(defaultPens().map(({ id, name, color, tipMm, kind }) => ({ id, name, color, tipMm, kind }))).toEqual([
+      { id: 'black', name: 'Black', color: BLACK, tipMm: 0.3, kind: 'technical' },
+      { id: 'green', name: 'Green', color: GREEN, tipMm: 0.3, kind: 'technical' },
+      { id: 'blue', name: 'Blue', color: BLUE, tipMm: 0.3, kind: 'technical' },
     ]);
+    // no ink spread is assumed, so one pass is exactly the nib
+    expect(defaultPens().every((x) => inkWidth(x) === 0.3)).toBe(true);
   });
   it('penFor finds a pen, and falls back to the first one for an unknown id', () => {
     const pens = defaultPens();

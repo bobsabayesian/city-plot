@@ -215,10 +215,17 @@ describe('title styles in the exports', () => {
     };
     expect(count(0.78)).toBe(3 * count(0.3));
   });
-  it('plotter: a plain filled title is still just its outline (no hatching unless asked)', () => {
+  it('plotter: a plain filled title is outlined and filled in with hatch lines of its pen', () => {
     const { out } = run((q) => { q.showWatermark = false; }, 'plotter');
-    expect(paths(out).some((x) => x.d.length > 1500 && x.d.includes('Z') && x.widthMm === 0.3)).toBe(true);
-    expect(paths(out).filter((x) => (x.d.match(/M/g) ?? []).length > 100)).toHaveLength(0);
+    expect(paths(out).some((x) => x.d.length > 1500 && x.d.includes('Z') && x.widthMm === 0.3)).toBe(true); // the outline
+    expect(paths(out).some((x) => (x.d.match(/M/g) ?? []).length > 50 && !x.d.includes('Z'))).toBe(true); // the hatching
+  });
+  it('plotter: a lighter title density leaves fewer hatch lines', () => {
+    const lines = (d: 'solid' | 'light') => {
+      const { out } = run((q) => { q.showWatermark = false; q.text.location.visible = false; q.text.info.visible = false; q.text.title.fillDensity = d; }, 'plotter');
+      return paths(out).filter((x) => !x.d.includes('Z')).reduce((n, x) => n + (x.d.match(/M/g) ?? []).length, 0);
+    };
+    expect(lines('light')).toBeLessThan(lines('solid') / 2);
   });
   it('plotter layers: the hatch and the outline each land in one layer per color and tip', () => {
     const { out } = run((q) => { q.text.title.style = 'outlineFill'; q.text.title.fillPen = 'blue'; q.text.title.pen = 'green'; }, 'plotter');

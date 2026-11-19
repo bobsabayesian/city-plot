@@ -16,10 +16,13 @@ export const KIND_LABELS: Record<LabelKind, string> = {
 /** Kinds fetched from OpenStreetMap (everything but the user's own). */
 export const OSM_KINDS = LANDMARK_KINDS.filter((k) => k !== 'custom');
 
-/** Marker drawn for a user's own landmark. */
-export const CUSTOM_ICONS = ['pin', 'home', 'star', 'flag'] as const;
-export type CustomIcon = (typeof CUSTOM_ICONS)[number];
-export const ICON_LABELS: Record<CustomIcon, string> = { pin: 'Pin', home: 'Home', star: 'Star', flag: 'Flag' };
+/** The little drawing beside a label. `default` is the kind's own shape; `none` leaves only the text. */
+export const ICONS = ['default', 'none', 'crosshair', 'circle', 'dot', 'triangle', 'diamond', 'square', 'star', 'home', 'flag'] as const;
+export type Icon = (typeof ICONS)[number];
+export const ICON_LABELS: Record<Icon, string> = {
+  default: 'Default', none: 'None', crosshair: '⌖ Crosshair', circle: '○ Circle', dot: '◉ Dot', triangle: '△ Triangle',
+  diamond: '◇ Diamond', square: '□ Square', star: '☆ Star', home: '⌂ House', flag: '⚑ Flag',
+};
 
 export interface Landmark {
   /** stable id: OSM `n123` / `w123` / `r123`, or `custom-1` */
@@ -30,8 +33,8 @@ export interface Landmark {
   lon: number;
   /** OpenStreetMap links it to Wikipedia or Wikidata, so people have heard of it */
   notable?: boolean;
-  /** user landmarks only */
-  icon?: CustomIcon;
+  /** user landmarks only: its marker (the default is a bullseye) */
+  icon?: Icon;
   /** user landmarks only: added automatically for a searched place (and still off), so it can be replaced by the next search */
   fromSearch?: boolean;
 }
@@ -43,6 +46,9 @@ export interface WaterLine {
   name?: string;
   coords: [number, number][];
 }
+
+/** A lake's name, as a point (the map tiles give names that way, apart from the lake's outline). */
+export interface WaterName { id: string; name: string; lat: number; lon: number }
 
 export interface LandmarkData {
   landmarks: Landmark[];
@@ -61,6 +67,10 @@ export interface FeatureOverride {
   /** the user chose this one from the list, even if its kind is switched off */
   pinned?: boolean;
   side?: Side;
+  /** this one's marker, instead of its kind's */
+  icon?: Icon;
+  /** clear the map lines this many mm around this label (instead of the general setting) */
+  clearMm?: number;
   /** label text size, pt; undefined = the landmarks' size */
   sizePt?: number;
   /** draw the marker without its name */
@@ -79,6 +89,10 @@ export interface FeatureSettings {
   /** write river and lake names */
   waterLabels: boolean;
   sizePt: number;
+  /** marker for each kind (default: the kind's own shape) */
+  icons: Partial<Record<LandmarkKind, Icon>>;
+  /** map lines are cut this many mm around every label (0 = leave them) */
+  clearMm: number;
   /** pens: one default for markers and labels, with per-kind overrides */
   pens: { default: string; overrides: Partial<Record<FeaturePenKey, string>> };
   overrides: Record<string, FeatureOverride>;
@@ -91,6 +105,8 @@ export const defaultFeatures = (): FeatureSettings => ({
   kinds: { attraction: true, museum: true, historic: true, worship: false, station: true, park: false, university: false, stadium: false, custom: true },
   waterLabels: false,
   sizePt: 11,
+  icons: {},
+  clearMm: 1,
   pens: { default: 'black', overrides: { waterLabel: 'blue' } },
   overrides: {},
 });

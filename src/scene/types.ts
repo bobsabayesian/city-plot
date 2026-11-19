@@ -1,9 +1,13 @@
 /** Renderer-agnostic drawing description. Preview, SVG, PDF and PNG all consume this. */
+/** Which part of the map a primitive draws; the editor preview uses it to open that part's settings when clicked. */
+export type Part = 'border' | 'title' | 'location' | 'info' | 'watermark' | 'water' | 'parks' | 'buildings' | 'paths' | 'minor' | 'secondary' | 'major' | 'rail' | 'north' | 'landmarks';
+
 /** How densely a fill is hatched for a plotter, relative to the pen tip. */
 export type HatchDensity = 'solid' | 'medium' | 'light';
 
 export interface PathPrim {
   kind: 'path';
+  part?: Part;
   /** SVG path data in poster mm */
   d: string;
   color: string;
@@ -22,6 +26,9 @@ export interface PathPrim {
 
 export interface TextPrim {
   kind: 'text';
+  part?: Part;
+  /** landmark this text labels; lets the preview open it for editing when clicked */
+  ref?: string;
   text: string;
   x: number;
   y: number;
@@ -42,6 +49,8 @@ export interface TextPrim {
   fitWidthMm?: number;
   /** plotter export: hatch the letters in this density rather than outlining them */
   hatch?: HatchDensity;
+  /** plotter export: how densely plain filled letters are filled in (they are outlined too); default solid */
+  plotFill?: HatchDensity;
   color: string;
   opacity?: number;
 }

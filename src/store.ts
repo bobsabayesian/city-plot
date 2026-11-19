@@ -31,6 +31,8 @@ interface Store {
   notice: string;
   set: (fn: (p: Project) => void) => void;
   setRegion: (r: Partial<Region>) => void;
+  /** replace the whole project (opening a saved one); the map data is fetched again for it */
+  openProject: (project: Project) => void;
   searchPlace: (q: string) => Promise<void>;
   choosePlace: (i: number) => void;
   /** Fetch whatever the current view needs that is not already here or on its way. */
@@ -48,6 +50,36 @@ export function regionFor(hit: Pick<Place, 'lat' | 'lon' | 'bbox'>): Region {
 
 export const clampKm = (km: number) => Math.min(REGION_MAX_KM, Math.max(REGION_MIN_KM, km));
 
+
+/**
+ * Fetch map layers for `ask`: all of them from the vector tiles in one go, which is fast; if the tiles cannot be
+ * reached, one Overpass query per layer instead. A result is only kept for a layer whose request is still this one.
+ */
+async function loadLayers(ask: BBox, keys: LayerKey[], view: BBox): Promise<void> {
+  const mine = (cur: { layers: Store['layers'] }, k: LayerKey) => cur.layers[k]?.requested === ask;
+  try {
+    // the tile decoder is only loaded when a map is first needed
+    const { loadCityTiles } = await import('./city/tiles');
+    const res = await loadCityTiles(ask);
+    useStore.setState((cur) => ({
+      layers: {
+        ...cur.layers,
+        // every layer comes with the tiles, so layers switched on later need no new fetch
+        ...Object.fromEntries(LAYER_KEYS.flatMap((k) => {
+          if (!(keys.includes(k) && mine(cur, k)) && (cur.layers[k]?.status === 'loading' || covered(cur.layers[k]?.data?.covers, view))) return [];
+          const data: LayerData = { covers: res.covers, ways: res.layers[k], source: 'tiles', ...(k === 'water' ? { waterNames: res.waterNames } : {}) };
+          return [[k, { data, status: 'idle' as const }]];
+        })),
+      },
+    }));
+  } catch {
+    await Promise.all(keys.map((key) => fetchLayer(key, ask).then(
+      (data) => useStore.setState((cur) => (mine(cur, key) ? { layers: { ...cur.layers, [key]: { data: { ...data, source: 'overpass' as const }, status: 'idle' as const } } } : {})),
+      (e) => useStore.setState((cur) => (mine(cur, key) ? { layers: { ...cur.layers, [key]: { data: cur.layers[key]?.data, status: 'error' as const, error: e instanceof Error ? e.message : 'Failed', requested: ask } } } : {})),
+    )));
+  }
+}
+
 let placeId = 0;
 
 /**
@@ -62,7 +94,7 @@ export function offerPlace(p: Project, place: Place): void {
   let n = 1;
   while (p.custom.some((c) => c.id === `custom-${n}`)) n++;
   const id = `custom-${n}`;
-  p.custom.push({ id, name: place.name, kind: 'custom', lat: place.lat, lon: place.lon, icon: 'pin', fromSearch: true });
+  p.custom.push({ id, name: place.name, kind: 'custom', lat: place.lat, lon: place.lon, icon: 'default', fromSearch: true });
   p.features.overrides[id] = { hidden: true };
 }
 let customId = 0;
@@ -90,6 +122,8 @@ export const useStore = create<Store>((setState, get) => ({
     p.region.lat = Math.max(-80, Math.min(80, p.region.lat));
     if (p.region.rotationDeg !== undefined) p.region.rotationDeg = ((((p.region.rotationDeg + 180) % 360) + 360) % 360) - 180;
   }),
+
+  openProject: (project) => setState({ project, layers: {}, landmarks: { status: 'idle' }, searchResults: [], searchIndex: 0, notice: '' }),
 
   choosePlace: (i) => {
     const hit = get().searchResults[i];
@@ -124,18 +158,16 @@ export const useStore = create<Store>((setState, get) => ({
   ensureData: (view, widestKm) => {
     const s = get();
     const enabled = LAYER_KEYS.filter((k) => s.project.layers[k].enabled && widestKm <= LAYER_MAX_KM[k]);
-    for (const key of enabled) {
+    const todo = enabled.filter((key) => {
       const st = s.layers[key];
-      if (covered(st?.data?.covers, view)) continue;
-      if (st?.status === 'loading' && covered(st.requested, view)) continue;
-      if (st?.status === 'error' && covered(st.requested, view)) continue; // the Retry button clears this
+      if (covered(st?.data?.covers, view)) return false;
+      // already on its way, or failed for this area (the Retry button clears that)
+      return !((st?.status === 'loading' || st?.status === 'error') && covered(st.requested, view));
+    });
+    if (todo.length) {
       const ask = padBBox(view, PAD);
-      const keep = st?.data;
-      setState((cur) => ({ layers: { ...cur.layers, [key]: { data: keep, status: 'loading', requested: ask } } }));
-      fetchLayer(key, ask).then(
-        (data) => setState((cur) => cur.layers[key]?.requested === ask ? { layers: { ...cur.layers, [key]: { data, status: 'idle' } } } : {}),
-        (e) => setState((cur) => cur.layers[key]?.requested === ask ? { layers: { ...cur.layers, [key]: { data: keep, status: 'error', error: e instanceof Error ? e.message : 'Failed', requested: ask } } } : {}),
-      );
+      setState((cur) => ({ layers: { ...cur.layers, ...Object.fromEntries(todo.map((k) => [k, { data: cur.layers[k]?.data, status: 'loading' as const, requested: ask }])) } }));
+      void loadLayers(ask, todo, view);
     }
 
     if (!s.project.features.enabled || widestKm > LANDMARKS_MAX_KM) return;
@@ -168,7 +200,7 @@ export const useStore = create<Store>((setState, get) => ({
       get().set((p) => {
         let n = ++customId;
         while (p.custom.some((c) => c.id === `custom-${n}`)) n = ++customId;
-        p.custom.push({ id: `custom-${n}`, name: label, kind: 'custom', lat: at.lat, lon: at.lon, icon: icon ?? 'pin' });
+        p.custom.push({ id: `custom-${n}`, name: label, kind: 'custom', lat: at.lat, lon: at.lon, icon: icon ?? 'default' });
       });
       setState({ busy: '' });
       return true;

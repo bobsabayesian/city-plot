@@ -1,6 +1,7 @@
 import { clipPolyline, type Rect, type XY } from '../geo/clip';
 import type { Fit } from '../geo/project';
-import type { CustomIcon, FeatureSettings, LabelKind, Landmark, Side, WaterLine } from './types';
+import type { Halo } from './halo';
+import type { FeatureSettings, Icon, LabelKind, Landmark, Side, WaterLine, WaterName } from './types';
 
 export interface LandmarkEntry {
   id: string;
@@ -19,7 +20,7 @@ export interface PlacedLabel {
   /** marker center, poster mm; undefined for lakes and rivers (label only) */
   marker?: XY;
   /** user landmarks: which marker to draw */
-  icon?: CustomIcon;
+  icon?: Icon;
   text: string;
   x: number;
   y: number;
@@ -33,6 +34,8 @@ export interface PlacedLabel {
 export interface PlaceInput {
   landmarks: Landmark[];
   water: WaterLine[];
+  /** lake names given as points, from the map tiles */
+  waterNames?: WaterName[];
   fit: Fit;
   frame: Rect;
   /** where label text may go; defaults to the frame. Routes often touch the frame edge, so callers allow some margin. */
@@ -42,6 +45,8 @@ export interface PlaceInput {
   settings: FeatureSettings;
   sizeMm: number;
   markerR: number;
+  /** other things on the map labels must keep clear of (the north arrow) */
+  obstacles?: Box[];
   /** the map is cut to a shape (a coaster): only points and labels inside it are kept */
   inside?: (x: number, y: number) => boolean;
 }
@@ -49,7 +54,7 @@ export interface PlaceInput {
 /** An oriented rectangle: center, size, and turn in radians (clockwise on screen). */
 export interface Box { cx: number; cy: number; w: number; h: number; ang: number }
 interface Candidate {
-  id: string; name: string; kind: LabelKind; x: number; y: number; score: number; marker: boolean; icon?: CustomIcon;
+  id: string; name: string; kind: LabelKind; x: number; y: number; score: number; marker: boolean; icon?: Icon;
   /** its kind is switched on (otherwise it is only available from the list) */
   enabled: boolean;
   /** river names: unit direction of the stretch the label follows, in radians, kept upright */
@@ -155,9 +160,13 @@ export function routeLengthIn(route: XY[], b: Box): number {
  * OpenStreetMap splits a long river into many ways. Join pieces of the same name that share an end point so a
  * river is labeled once, and along its longest clear stretch.
  */
+/** How close (degrees, about 3 m) two river ends must be to count as joined. */
+export const JOIN_TOLERANCE_DEG = 3e-5;
+
 export function stitchRivers(water: WaterLine[]): { id: string; name: string; coords: [number, number][] }[] {
   const byName = new Map<string, { name: string; chains: [number, number][][] }>();
-  const key = (p: [number, number]) => `${p[0]},${p[1]}`;
+  // pieces cut at a map tile's border meet within a few meters of each other, not exactly
+  const same = (p: [number, number], q: [number, number]) => Math.abs(p[0] - q[0]) <= JOIN_TOLERANCE_DEG && Math.abs(p[1] - q[1]) <= JOIN_TOLERANCE_DEG;
   for (const w of water) {
     if (w.kind !== 'river' || !w.name?.trim() || w.coords.length < 2) continue;
     const g = byName.get(w.name.toLowerCase()) ?? { name: w.name, chains: [] };
@@ -168,13 +177,13 @@ export function stitchRivers(water: WaterLine[]): { id: string; name: string; co
       merged = false;
       for (let i = 0; i < g.chains.length; i++) {
         const c = g.chains[i]!;
-        const [cs, ce] = [key(c[0]!), key(c[c.length - 1]!)];
-        const [ps, pe] = [key(piece[0]!), key(piece[piece.length - 1]!)];
+        const [cs, ce] = [c[0]!, c[c.length - 1]!];
+        const [ps, pe] = [piece[0]!, piece[piece.length - 1]!];
         let joined: [number, number][] | undefined;
-        if (ce === ps) joined = [...c, ...piece.slice(1)];
-        else if (pe === cs) joined = [...piece, ...c.slice(1)];
-        else if (ce === pe) joined = [...c, ...[...piece].reverse().slice(1)];
-        else if (cs === ps) joined = [...[...c].reverse(), ...piece.slice(1)];
+        if (same(ce, ps)) joined = [...c, ...piece.slice(1)];
+        else if (same(pe, cs)) joined = [...piece, ...c.slice(1)];
+        else if (same(ce, pe)) joined = [...c, ...[...piece].reverse().slice(1)];
+        else if (same(cs, ps)) joined = [...[...c].reverse(), ...piece.slice(1)];
         if (joined) {
           g.chains.splice(i, 1);
           piece = joined;
@@ -263,8 +272,10 @@ export interface LandmarkPlacement {
   pool: PoolItem[];
   /** free label slots per group: the limit minus what is drawn */
   open: Record<LabelGroup, number>;
-  /** space the drawn labels and markers take, so other things (contour numbers) can stay clear of them */
+  /** space the drawn labels and markers take, so other things can stay clear of them */
   obstacles: Box[];
+  /** zones around placed labels where map lines should be cut away (empty unless clearing is on) */
+  halos: Halo[];
 }
 
 const MAX_POOL = 60;
@@ -297,7 +308,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   for (const l of inp.landmarks) {
     if (!l.name.trim()) continue;
     const [x, y] = fit.toMm(l.lat, l.lon);
-    addCand({ id: l.id, name: l.name, kind: l.kind, x, y, marker: true, icon: l.icon, enabled: s.kinds[l.kind], base: KIND_WEIGHT[l.kind] + (l.notable ? NOTABLE_BONUS : 0) });
+    addCand({ id: l.id, name: l.name, kind: l.kind, x, y, marker: true, icon: s.overrides[l.id]?.icon ?? l.icon ?? s.icons?.[l.kind], enabled: s.kinds[l.kind], base: KIND_WEIGHT[l.kind] + (l.notable ? NOTABLE_BONUS : 0) });
   }
 
   const lb = inp.labelBounds ?? frame;
@@ -310,6 +321,10 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
       const cx = mm.reduce((a, p) => a + p[0], 0) / mm.length;
       const cy = mm.reduce((a, p) => a + p[1], 0) / mm.length;
       addCand({ id: w.id, name: w.name, kind: 'lake', x: cx, y: cy, marker: false, enabled: true, base: KIND_WEIGHT.lake + Math.min(2, area / (frame.w * frame.h * 0.02)) });
+    }
+    for (const wn of inp.waterNames ?? []) {
+      const [x, y] = fit.toMm(wn.lat, wn.lon);
+      addCand({ id: wn.id, name: wn.name, kind: 'lake', x, y, marker: false, enabled: true, base: KIND_WEIGHT.lake + 0.8 });
     }
     const diag = Math.hypot(frame.w, frame.h);
     for (const r of stitchRivers(inp.water)) {
@@ -338,12 +353,25 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   // Markers of the candidates most likely to be drawn are reserved up front, so a label placed early
   // can't end up on top of a marker that is placed later.
   const likely = unique.filter((c) => c.marker && !s.overrides[c.id]?.noMarker && !s.overrides[c.id]?.hidden && (c.enabled || s.overrides[c.id]?.pinned));
-  const taken: Box[] = likely
+  const taken: Box[] = [...(inp.obstacles ?? [])];
+  taken.push(...likely
+    .filter((c) => c.icon !== 'none')
     .slice(0, s.maxLabels + 4)
-    .map((c) => boxAt(c.x - markerR, c.y - markerR, c.x + markerR, c.y + markerR));
+    .map((c) => boxAt(c.x - markerR, c.y - markerR, c.x + markerR, c.y + markerR)));
   const entries: LandmarkEntry[] = [];
   const labels: PlacedLabel[] = [];
   const gap = markerR * 0.7;
+  // keep a little air between labels so they don't read as one block of text
+  const pad = sizeMm * 0.35;
+  const labelBoxes: Box[] = [];
+  const halos: Halo[] = [];
+  const addHalo = (c: Candidate, box: Box, marker?: Box) => {
+    const r = s.overrides[c.id]?.clearMm ?? s.clearMm ?? 0;
+    if (r <= 0) return;
+    halos.push({ box, r });
+    if (marker) halos.push({ box: marker, r });
+  };
+  const padded = (b: Box): Box => ({ ...b, w: b.w + 2 * pad, h: b.h + 2 * pad });
   const budget = { point: s.maxLabels, water: s.maxWaterLabels };
   // Per group: labels the user pinned (P), auto labels drawn (A), and auto labels the user hid (V).
   // Hidden labels hold their slot open, and pinned labels are what fill it, so promotion of further
@@ -358,7 +386,7 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
   const place = (c: Candidate, name: string, ov: NonNullable<PlaceInput['settings']['overrides'][string]>): boolean => {
     // per-landmark formatting: its own text size, with or without the marker, with or without the name
     const sz = ov.sizePt && ov.sizePt > 0 ? ov.sizePt * (25.4 / 72) : sizeMm;
-    const hasMarker = c.marker && !ov.noMarker;
+    const hasMarker = c.marker && !ov.noMarker && c.icon !== 'none';
     const w = name.length * sz * CHAR_W;
 
     if (c.kind === 'river') {
@@ -429,10 +457,12 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
         box = boxAt(c.x - w / 2, c.y - sz * 0.55, c.x + w / 2, c.y + sz * 0.45);
       }
       const inside = fits(box, lb);
-      const labelsFree = !taken.some((t) => overlap(t, box)) && !(hasMarker && side !== 'middle' && overlap(box, markerBox));
+      const labelsFree = !taken.some((t) => overlap(t, box)) && !labelBoxes.some((t) => overlap(t, padded(box))) && !(hasMarker && side !== 'middle' && overlap(box, markerBox));
       const crossesRoute = routeHits(route, box);
       if ((inside && labelsFree && !crossesRoute) || forced) {
         taken.push(box);
+        labelBoxes.push(box);
+        addHalo(c, box, hasMarker ? markerBox : undefined);
         if (hasMarker) taken.push(markerBox);
         labels.push(label);
         return true;
@@ -443,6 +473,8 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
     if (relax && fallbacks.length) {
       const best = fallbacks.reduce((p, q) => (q.crossing < p.crossing ? q : p));
       taken.push(best.box);
+      labelBoxes.push(best.box);
+      addHalo(c, best.box, hasMarker ? markerBox : undefined);
       if (hasMarker) taken.push(markerBox);
       labels.push(best.label);
       return true;
@@ -496,5 +528,6 @@ export function placeLandmarks(inp: PlaceInput): LandmarkPlacement {
     entries, labels, pool,
     open: { point: Math.max(0, budget.point - drawn.point), water: Math.max(0, budget.water - drawn.water) },
     obstacles: taken,
+    halos,
   };
 }

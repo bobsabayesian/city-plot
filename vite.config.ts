@@ -20,5 +20,5 @@ const devApi = {
 
 export default defineConfig({
   plugins: [react(), devApi],
-  test: { include: ['test/**/*.test.ts'] },
+  test: { include: ['test/**/*.test.{ts,tsx}'] },
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { placeLandmarks, type PlaceInput } from '../src/features/select';
-import { defaultFeatures, LANDMARK_KINDS, CUSTOM_ICONS, type Landmark, type WaterLine } from '../src/features/types';
+import { defaultFeatures, ICONS, LANDMARK_KINDS, type Landmark, type WaterLine } from '../src/features/types';
 import { markerPath } from '../src/features/draw';
 import { fitBBox } from '../src/geo/project';
 import { handleApi } from '../worker/api';
@@ -128,10 +128,12 @@ describe('markers', () => {
     expect(new Set(ds).size).toBe(LANDMARK_KINDS.length);
     expect(ds.every((d) => d.startsWith('M'))).toBe(true);
   });
-  it('your own landmark can be a pin, a house, a star or a flag, each its own shape', () => {
-    const ds = CUSTOM_ICONS.map((i) => markerPath('custom', 10, 10, 2, i));
-    expect(new Set(ds).size).toBe(CUSTOM_ICONS.length);
-    expect(markerPath('custom', 10, 10, 2)).toBe(markerPath('custom', 10, 10, 2, 'pin'));
+  it('every icon is its own shape, and none draws nothing', () => {
+    const icons = ICONS.filter((i) => i !== 'none' && i !== 'default');
+    const ds = icons.map((i) => markerPath('custom', 10, 10, 2, i));
+    expect(new Set(ds).size).toBe(icons.length);
+    expect(markerPath('custom', 10, 10, 2)).toBe(markerPath('custom', 10, 10, 2, 'dot'));
+    expect(markerPath('custom', 10, 10, 2, 'none')).toBe('');
   });
   it('a house marker stays within its radius, scaled for visibility', () => {
     const nums = (markerPath('custom', 100, 100, 2, 'home').match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
