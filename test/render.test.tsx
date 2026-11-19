@@ -6,6 +6,7 @@ import { App } from '../src/ui/App';
 import { useStore } from '../src/store';
 import { defaultProject } from '../src/scene/project';
 import { cityProject } from './fixture';
+import { routeStops } from '../src/features/route';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -174,5 +175,47 @@ describe('the Scale picker', () => {
     expect(useStore.getState().project.region!.scale).toBe(25000);
     expect(text()).toContain('Fixed at 1:25,000');
     expect(text()).toContain('250 m on the ground');
+  });
+});
+
+describe('memory route from photos', () => {
+  const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
+  const fixture = async (name: string, type: string) => {
+    const { readFileSync } = await import('node:fs');
+    return new File([readFileSync(`test/fixtures/photos/${name}`)], name, { type });
+  };
+
+  it('reads the photos on the device, adds dated stops, and lists the one with no location to place by tap', async () => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:thumb', revokeObjectURL: () => {} }));
+    await show(cityProject());
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Memory route') && b.getAttribute('aria-expanded') !== null));
+    const group = host.querySelector('#group-route')!;
+    await click(group.querySelector('[role="switch"]'));
+
+    const input = group.querySelector('input[type=file]') as HTMLInputElement;
+    expect(input.accept).toContain('image/*');
+    expect(input.multiple).toBe(true);
+    const files = [await fixture('needle.jpg', 'image/jpeg'), await fixture('needle.avif', 'image/avif'), await fixture('no-gps.jpg', 'image/jpeg'), await fixture('sydney.jpg', 'image/jpeg')];
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+
+    const p = useStore.getState().project;
+    // the JPEG and the HEIF of the same moment at the Space Needle are one stop; Sydney (2016) comes after it (2014)
+    expect(routeStops(p.route, p.custom).map((s) => s.name)).toEqual(['21 Jun 2014', '2 Jan 2016']);
+    expect(group.textContent).toContain('Added 2 stops from 4 photos');
+    expect(group.textContent).toContain('1 taken where a stop already is that day');
+    expect(group.textContent).toContain('1 without a location');
+    expect(group.querySelectorAll('img.thumb').length).toBeGreaterThanOrEqual(2);
+
+    // place the photo that had no location: the map waits for a tap, which calls back with the spot
+    await click([...group.querySelectorAll('button')].find((b) => b.textContent === 'Place on map'));
+    const placing = useStore.getState().placing!;
+    expect(placing.label).toBe('31 Dec 2019');
+    expect(text()).toContain('Tap the map where 31 Dec 2019 was taken');
+    await act(async () => { useStore.getState().setPlacing(null); placing.done(47.61, -122.34); });
+    const q = useStore.getState().project;
+    expect(routeStops(q.route, q.custom).map((s) => s.name)).toEqual(['21 Jun 2014', '2 Jan 2016', '31 Dec 2019']);
+    expect(group.textContent).not.toContain('Place on map');
   });
 });

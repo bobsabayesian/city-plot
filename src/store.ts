@@ -39,6 +39,9 @@ interface Store {
   ensureData: (view: BBox, widestKm: number) => void;
   retryData: () => void;
   addCustom: (name: string, where: string, icon: Landmark['icon']) => Promise<boolean>;
+  /** waiting for a tap on the map to place something (a photo with no location): what it is, and what to do with the spot */
+  placing: { label: string; done: (lat: number, lon: number) => void } | null;
+  setPlacing: (p: Store['placing']) => void;
 }
 
 /** Region a search result starts from: its own extent, kept to a size the layers can draw. */
@@ -107,6 +110,8 @@ export const useStore = create<Store>((setState, get) => ({
   landmarks: { status: 'idle' },
   busy: '',
   notice: '',
+  placing: null,
+  setPlacing: (placing) => setState({ placing }),
 
   set: (fn) =>
     setState((s) => {

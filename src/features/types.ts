@@ -39,6 +39,8 @@ export interface Landmark {
   fromSearch?: boolean;
   /** user landmarks only: a short note for the memory route's key ("where we met, 2009") */
   note?: string;
+  /** user landmarks made from a photo: when it was taken, camera local time "YYYY-MM-DDTHH:MM:SS"; orders the route */
+  takenAt?: string;
 }
 
 /** A lake or river, for writing its name; lakes are closed rings, [lat, lon] pairs. */

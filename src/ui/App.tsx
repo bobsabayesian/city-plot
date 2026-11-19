@@ -125,6 +125,14 @@ function Editor({ narrow }: { narrow: boolean }) {
   const layerState = useStore((s) => s.layers);
   const landmarkState = useStore((s) => s.landmarks);
   const [tab, setTab] = useState<'settings' | 'map'>('settings');
+  // placing a photo by hand: on a phone, show the map for the tap, then go back to the settings
+  const placing = useStore((s) => s.placing);
+  const wasPlacing = useRef(false);
+  useEffect(() => {
+    if (placing && narrow) setTab('map');
+    if (!placing && wasPlacing.current && narrow) setTab('settings');
+    wasPlacing.current = !!placing;
+  }, [placing, narrow]);
   const [query, setQuery] = useState('');
   const [err, setErr] = useState('');
   const [paperInExport, setPaperInExport] = useState(false);
@@ -276,8 +284,16 @@ function Editor({ narrow }: { narrow: boolean }) {
     const onUp = (e: PointerEvent) => {
       drag = undefined;
       el.classList.remove('dragging');
-      // a press that did not move is a click: open what was clicked
-      if (press && e.type === 'pointerup' && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 4) live.current.edit(press.target);
+      // a press that did not move is a click: place what is waiting to be placed there, or open what was clicked
+      if (press && e.type === 'pointerup' && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 4) {
+        const placing = useStore.getState().placing;
+        const m = toMm(e);
+        if (placing && m && inFrame(m)) {
+          const [lat, lon] = m.v.fit.fromMm(m.x, m.y);
+          useStore.getState().setPlacing(null);
+          placing.done(lat, lon);
+        } else if (!placing) live.current.edit(press.target);
+      }
       press = undefined;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -692,7 +708,7 @@ function Editor({ narrow }: { narrow: boolean }) {
         })}
         </Group>
 
-        <RouteGroup />
+        <RouteGroup bbox={view?.bbox} />
 
         {region && view && <GridGroup scale={view.scale} lat={region.lat} lon={region.lon} />}
 
@@ -942,7 +958,13 @@ function Editor({ narrow }: { narrow: boolean }) {
           )}
         </div>
         <div className="stage">
-          <div className="sheet" ref={sheet} role="img" aria-label="Preview of the map" style={{ cursor: region ? 'grab' : undefined, ...sheetShape(scene) }}
+          {placing && (
+            <div className="placing" role="status">
+              <span>Tap the map where <b>{placing.label}</b> was taken.</span>
+              <button type="button" onClick={() => useStore.getState().setPlacing(null)}>Cancel</button>
+            </div>
+          )}
+          <div className="sheet" ref={sheet} role="img" aria-label="Preview of the map" style={{ cursor: placing ? 'crosshair' : region ? 'grab' : undefined, ...sheetShape(scene) }}
             onMouseOver={(e) => setHovered(plotPreview ? '' : clickTarget(e.target)?.label ?? '')} onMouseLeave={() => setHovered('')} dangerouslySetInnerHTML={{ __html: previewSvg }} />
           {watching && plan && (
             <PlotPlayer key={plan.totalS} plan={plan} sheet={sheet} controls={playerSlot} widthMm={scene.widthMm} paper={p.paper} dark={isDarkPaper(p.paper)} onClose={() => setWatching(false)} />

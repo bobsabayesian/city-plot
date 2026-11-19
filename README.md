@@ -23,6 +23,10 @@ Pick a city or landmark, set how much ground the map covers, and style it for a 
 - **Memory route**: join some of your own landmarks in order (Memory route group): a dotted line with an arrow on each leg,
   numbered stops, map lines cleared either side, and a key under the map listing each stop with a short note
   (`src/features/route.ts`).
+- **Route from photos**: in Memory route, **Add from photos** (on a phone: the photo library or camera) reads each photo's
+  GPS position and date from its EXIF on the device (JPEG and HEIC, `src/photos.ts`); photos are never uploaded. Stops are
+  named by date and go in the order the photos were taken; photos from one place on one day are one stop. Phones often
+  strip the location when a photo is picked in a browser, so those are listed to **Place on map** with a tap.
 - **Dashes on the plotter**: plotting software ignores `stroke-dasharray`, so the plotter export cuts dashed lines into real
   dashes, dotted lines into pen taps, and heavy dots into small discs (a tap and rings).
 - **Plot time**: the Plotter preview estimates how long the plot takes (pens in palette order, lines sorted to keep pen-up
