@@ -138,7 +138,9 @@ export function decodeCityTile(bytes: Uint8Array, z: number, tx: number, ty: num
         const key = transportLayer(p);
         if (key) for (const line of rings(f)) addLine(key, line);
       } else if (layerName === 'building') {
-        for (const ring of rings(f)) addArea('buildings', ring);
+        // its height, for hatching by height: the top of the building (a part raised on stilts has a minimum height too)
+        const h = Math.max(Number(p.render_height) || 0, Number(p.render_min_height) || 0);
+        for (const ring of rings(f)) addArea('buildings', ring, h > 0 ? { h } : {});
       } else if (layerName === 'landcover') {
         const cls = text(p.class);
         if (cls === 'grass' || cls === 'wood') for (const ring of rings(f)) addArea('parks', ring);

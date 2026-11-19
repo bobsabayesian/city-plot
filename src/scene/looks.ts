@@ -113,10 +113,11 @@ export const LOOKS: Look[] = [
     ],
     ink: 'ink',
     layers: {
-      buildings: { pen: 'ink', weightMm: 0.25, fill: 'solid' },
+      // a field map keeps its buildings and side streets at 1:25,000 and 1:50,000
+      buildings: { pen: 'ink', weightMm: 0.25, fill: 'solid', wide: true },
       major: { pen: 'road', weightMm: 0.78 },
       secondary: { pen: 'road', weightMm: 0.54 },
-      minor: { pen: 'ink', weightMm: 0.25 },
+      minor: { pen: 'ink', weightMm: 0.25, wide: true },
       rail: { enabled: true, pen: 'ink', weightMm: 0.54, style: 'solid' },
       water: { pen: 'water', weightMm: 0.25, fill: 'light' },
       parks: { pen: 'wood', weightMm: 0.25, fill: 'medium', style: 'solid' },

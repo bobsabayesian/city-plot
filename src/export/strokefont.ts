@@ -27,13 +27,15 @@ function parse(row: string): Glyph {
 }
 
 const circle = (cx: number, cy: number, r: number): Pt[] => Array.from({ length: 13 }, (_, i) => [cx + r * Math.cos((i / 12) * Math.PI * 2), cy + r * Math.sin((i / 12) * Math.PI * 2)] as Pt);
-/** characters the Hershey set does not have but the poster uses: the degree sign, a middle dot, dashes and a few quotes */
+/** characters the Hershey set does not have but the poster uses: the degree sign, minutes and seconds, a middle dot, dashes and a few quotes */
 const EXTRA: Record<string, Glyph> = {
   '°': { adv: 12, strokes: [circle(6, 5, 3)] },
   '·': { adv: 8, strokes: [[[4, 12], [4, 13]]] },
   '–': { adv: 24, strokes: [[[2, 13], [22, 13]]] },
   '—': { adv: 32, strokes: [[[1, 13], [31, 13]]] },
   '’': { adv: 8, strokes: [[[4, 1], [3, 5]]] },
+  '′': { adv: 8, strokes: [[[5, 1], [3, 6]]] },
+  '″': { adv: 12, strokes: [[[5, 1], [3, 6]], [[9, 1], [7, 6]]] },
   '×': { adv: 20, strokes: [[[4, 8], [16, 20]], [[16, 8], [4, 20]]] },
 };
 

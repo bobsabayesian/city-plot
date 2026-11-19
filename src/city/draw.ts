@@ -6,7 +6,7 @@ import type { HatchDensity, PathPrim } from '../scene/types';
 import type { WaterLine } from '../features/types';
 import { cutOutHalos, cutRingOutOfHalos, type Halo } from '../features/halo';
 import { clipWaterlines, waterlinesFor } from './waterlines';
-import { isAreaLayer, type LayerData, type LayerKey, type LayerStyle, type StrokeStyle, type Way } from './types';
+import { heightDensity, isAreaLayer, type LayerData, type LayerKey, type LayerStyle, type StrokeStyle, type Way } from './types';
 
 const f = (n: number) => +n.toFixed(2);
 const sub = (pts: XY[], close: boolean) => pts.map(([x, y], i) => `${i ? 'L' : 'M'}${f(x)} ${f(y)}`).join('') + (close ? 'Z' : '');
@@ -66,6 +66,8 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
   const rings: XY[][] = [];
   /** rings that are only filled: an area cut by a map tile's edge, whose outline is drawn as open lines */
   const fillOnly: XY[][] = [];
+  /** each ring's way, for hatching by height */
+  const heightOf = new Map<XY[], number | undefined>();
   for (const w of data.ways) {
     const mm = toMm(w, fit);
     if (mm.length < 2) continue;
@@ -74,6 +76,7 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
     if (w.closed) {
       if (Math.max(b.x1 - b.x0, b.y1 - b.y0) < MIN_RING_MM) continue;
       (w.fill ? fillOnly : rings).push(mm);
+      heightOf.set(mm, w.h);
     } else lines.push({ sub: w.sub, pts: mm });
   }
 
@@ -103,12 +106,21 @@ export function layerPrims(key: LayerKey, style: LayerStyle, pen: Pen, data: Lay
   }
 
   if (isAreaLayer(key) && style.fill !== 'off' && (rings.length || fillOnly.length)) {
-    const fill = [...rings, ...fillOnly]
-      .map((r) => (clip ? clipPolygonConvex(simplifyXY(r, SIMPLIFY_MM), clip.poly) : clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame)))
-      .filter((r) => r.length >= 3)
-      .flatMap((r) => cutRingOutOfHalos(r, halos))
-      .map((r) => sub(r, true));
-    if (fill.length) prims.unshift({ kind: 'path', part: key, d: fill.join(''), color: pen.color, pen: pen.id, mode: 'fill', opacity: FILL_OPACITY[style.fill], hatch: style.fill });
+    const shape = (r: XY[]) => [clip ? clipPolygonConvex(simplifyXY(r, SIMPLIFY_MM), clip.poly) : clipPolygon(simplifyXY(r, SIMPLIFY_MM), frame)]
+      .filter((q) => q.length >= 3)
+      .flatMap((q) => cutRingOutOfHalos(q, halos))
+      .map((q) => sub(q, true));
+    // one fill per density: everything alike, or by each building's height
+    const groups = new Map<HatchDensity, string[]>();
+    for (const r of [...rings, ...fillOnly]) {
+      const density = style.fill === 'height' ? (key === 'buildings' ? heightDensity(heightOf.get(r)) : 'light') : style.fill;
+      if (!density) continue;
+      (groups.get(density) ?? groups.set(density, []).get(density)!).push(...shape(r));
+    }
+    // lightest first, so denser hatching is drawn over it
+    for (const density of (['solid', 'medium', 'light'] as HatchDensity[]).filter((x) => groups.get(x)?.length)) {
+      prims.unshift({ kind: 'path', part: key, d: groups.get(density)!.join(''), color: pen.color, pen: pen.id, mode: 'fill', opacity: FILL_OPACITY[density], hatch: density });
+    }
   }
   return prims;
 }

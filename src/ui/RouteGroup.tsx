@@ -18,7 +18,7 @@ const inView = (b: BBox | undefined, s: { lat: number; lon: number }) => !!b && 
 const Row = ({ label, children }: { label: string; children: ReactNode }) => <div className="row"><label>{label}</label>{children}</div>;
 
 /** The memory route: pick some of your own landmarks, put them in order, give each a note. */
-export function RouteGroup({ bbox }: { bbox?: BBox }) {
+export function RouteGroup({ bbox, routeMisses }: { bbox?: BBox; routeMisses?: number }) {
   const p = useStore((s) => s.project);
   const set = useStore((s) => s.set);
   const setRegion = useStore((s) => s.setRegion);
@@ -197,13 +197,22 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
       <h3>Line</h3>
       <Row label="Pen"><PenSelect pens={p.pens} value={r.pen} onChange={(id) => set((x) => { x.route.pen = id!; })} /></Row>
       <Row label="Thickness"><input type="number" min={0.1} max={3} step={0.05} value={r.weightMm} onChange={(e) => set((x) => { x.route.weightMm = Math.min(3, Math.max(0.1, +e.target.value || 0.78)); })} /><span className="unit">mm</span></Row>
+      <Row label="Path">
+        <select value={r.streets ? 'streets' : r.curved ? 'curved' : 'straight'} data-edit="route-path" onChange={(e) => set((x) => {
+          const v = e.target.value;
+          x.route.streets = v === 'streets';
+          if (v !== 'streets') x.route.curved = v === 'curved';
+        })}>
+          <option value="curved">Curved</option><option value="straight">Straight</option><option value="streets">Along the streets</option>
+        </select>
+      </Row>
+      {r.streets && <div className="hint">The walk between stops is found in the map's own street data, on this device.{routeMisses ? ` ${routeMisses} ${routeMisses === 1 ? 'leg was' : 'legs were'} not found along the streets (a stop off the map, or far from a street) and ${routeMisses === 1 ? 'is' : 'are'} drawn ${r.curved ? 'curved' : 'straight'}.` : ''}</div>}
       <Row label="Style">
         <select value={r.style} onChange={(e) => set((x) => { x.route.style = e.target.value as RouteStyle; })}>
           <option value="dotted">Dotted</option><option value="dashed">Dashed</option><option value="solid">Solid</option>
         </select>
       </Row>
       <div className="kinds">
-        <label><input type="checkbox" checked={r.curved} onChange={(e) => set((x) => { x.route.curved = e.target.checked; })} /> Curved</label>
         <label><input type="checkbox" checked={r.arrows} onChange={(e) => set((x) => { x.route.arrows = e.target.checked; })} /> Arrows</label>
         <label><input type="checkbox" checked={r.numbers} onChange={(e) => set((x) => { x.route.numbers = e.target.checked; })} /> Numbered stops</label>
         <label><input type="checkbox" checked={r.key} onChange={(e) => set((x) => { x.route.key = e.target.checked; })} /> Key under the map</label>

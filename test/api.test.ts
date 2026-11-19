@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cacheKey, handleApi, normalizeWays, snapBBox, stitch, toLandmark } from '../worker/api';
-import { LAYER_MAX_KM, SNAP_DEG } from '../src/city/types';
+import { LAYER_MAX_KM, OVERPASS_MAX_KM, SNAP_DEG } from '../src/city/types';
 import { fetchLandmarks, fetchLayer } from '../src/lookup';
 
 const box = (minLat: number, maxLat: number, minLon: number, maxLon: number) => ({ minLat, maxLat, minLon, maxLon });
@@ -174,8 +174,8 @@ describe('the Worker answers layers and landmarks', () => {
     stubCache();
     stubOverpass();
     const wide = (km: number) => qs(box(47.6, 47.6 + km / 110.57, -122.4, -122.4 + km / (111.32 * Math.cos((47.6 * Math.PI) / 180))));
-    expect((await get(`layer?layer=buildings&${wide(LAYER_MAX_KM.buildings * 3)}`)).status).toBe(400);
-    expect((await get(`layer?layer=buildings&${wide(LAYER_MAX_KM.buildings * 1.3)}`)).status).toBe(200);
+    expect((await get(`layer?layer=buildings&${wide(OVERPASS_MAX_KM.buildings * 3)}`)).status).toBe(400);
+    expect((await get(`layer?layer=buildings&${wide(OVERPASS_MAX_KM.buildings * 1.3)}`)).status).toBe(200);
   });
   it('an answer that hit the size limit is flagged and is not cached for long', async () => {
     stubCache();

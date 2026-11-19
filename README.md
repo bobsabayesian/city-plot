@@ -20,9 +20,20 @@ Pick a city or landmark, set how much ground the map covers, and style it for a 
 - **Grid**: a UTM kilometre grid (`src/scene/grid.ts`), numbered in the margin like a military or survey map (eastings
   along the top and bottom, northings up the sides). The lines are the true UTM lines, so they lean slightly off north.
   The **Military** look turns it on, with red roads, black buildings, blue water and green woods.
+- **Title block**: Map info can show a **scale bar** (round metres or feet/miles, true to the map) and an **on foot** bar
+  (minutes at 5 km/h) beside Area and Scale (`src/scene/scalebar.ts`); values too long for the row are set smaller, all
+  alike. Coordinates can be written 47°36′22″ N. The title can sit in a **cartouche**: a ruled box, a double rule, or corner
+  brackets (`src/scene/cartouche.ts`), with the map giving up the room it needs.
+- **Wide views**: buildings, footpaths and minor streets switch off past 4, 6 and 12 km as before; each has a "Wide views"
+  switch that draws it up to 13, 10 and 24 km (the map tiles carry them that far). The Military look turns it on.
+- **Hatching by height**: the buildings layer can be hatched by each building's height from the map tiles: outlines under
+  15 m, then light, medium, and solid above 120 m.
+- **Surprise me**: the start screen (and Place) offers a curated city with a street plan worth plotting (`src/surprise.ts`).
 - **Memory route**: join some of your own landmarks in order (Memory route group): a dotted line with an arrow on each leg,
   numbered stops, map lines cleared either side, and a key under the map listing each stop with a short note
-  (`src/features/route.ts`).
+  (`src/features/route.ts`). Path: curved, straight, or **along the streets**: the walk is found in the map's own street
+  data on the device (`src/features/streetRoute.ts`, Dijkstra over footpaths and streets), so no stop goes to a routing
+  service; a leg it cannot find keeps its curve.
 - **Route from photos**: in Memory route, **Add from photos** (on a phone: the photo library or camera) reads each photo's
   GPS position and date from its EXIF on the device (JPEG and HEIC, `src/photos.ts`); photos are never uploaded. Stops are
   named by date and go in the order the photos were taken; photos from one place on one day are one stop. Phones often

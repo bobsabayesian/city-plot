@@ -1,5 +1,5 @@
 /** Shared by the Cloudflare Worker (production) and the Vite dev server (local). */
-import { LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_MAX_KM, SNAP_DEG, type LayerKey, type Way } from '../src/city/types';
+import { LANDMARKS_MAX_KM, LAYER_KEYS, OVERPASS_MAX_KM, SNAP_DEG, type LayerKey, type Way } from '../src/city/types';
 import type { Landmark, LandmarkKind } from '../src/features/types';
 
 const UA = 'city-plot/0.1 (https://city.bobsabayesian.io)';
@@ -348,7 +348,7 @@ async function route(url: URL): Promise<Response> {
       if (!box) return json({ error: 'missing bbox' }, 400);
       const [w, h] = boxKm(box);
       // the client pads what it asks for by up to 30%, and a turned map needs the box around a tilted view, so allow room over the layer's own limit
-      if (Math.max(w, h) > LAYER_MAX_KM[layer] * 2 + 1) return json({ error: `area too large for ${layer}` }, 400);
+      if (Math.max(w, h) > OVERPASS_MAX_KM[layer] * 2 + 1) return json({ error: `area too large for ${layer}` }, 400);
       const covers = snapBBox(box);
       const bb = `(${covers.minLat},${covers.minLon},${covers.maxLat},${covers.maxLon})`;
       const limit = LAYER_LIMIT[layer];

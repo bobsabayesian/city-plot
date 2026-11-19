@@ -3,7 +3,7 @@ import { defaultProject, REGION_MAX_KM, REGION_MIN_KM, type Place, type Project,
 import { parseLatLon } from './scene/buildScene';
 import type { BBox } from './geo/project';
 import { covered, padBBox } from './city/draw';
-import { LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from './city/types';
+import { LANDMARKS_MAX_KM, LAYER_KEYS, layerMaxKm, OVERPASS_MAX_KM, type LayerData, type LayerKey } from './city/types';
 import type { Landmark, LandmarkData } from './features/types';
 import { fetchLandmarks, fetchLayer, geocode, reverseLocation, type GeocodeHit } from './lookup';
 
@@ -39,6 +39,10 @@ interface Store {
   ensureData: (view: BBox, widestKm: number) => void;
   retryData: () => void;
   addCustom: (name: string, where: string, icon: Landmark['icon']) => Promise<boolean>;
+  /** go straight to a place at a chosen width (Surprise me), with a line about why it is worth drawing */
+  goTo: (place: Place, widthKm: number, why?: string) => void;
+  /** why the place was a surprise pick, shown until another place is chosen */
+  surprise: string;
   /** waiting for a tap on the map to place something (a photo with no location): what it is, and what to do with the spot */
   placing: { label: string; done: (lat: number, lon: number) => void } | null;
   setPlacing: (p: Store['placing']) => void;
@@ -58,7 +62,7 @@ export const clampKm = (km: number) => Math.min(REGION_MAX_KM, Math.max(REGION_M
  * Fetch map layers for `ask`: all of them from the vector tiles in one go, which is fast; if the tiles cannot be
  * reached, one Overpass query per layer instead. A result is only kept for a layer whose request is still this one.
  */
-async function loadLayers(ask: BBox, keys: LayerKey[], view: BBox): Promise<void> {
+async function loadLayers(ask: BBox, keys: LayerKey[], view: BBox, widestKm: number): Promise<void> {
   const mine = (cur: { layers: Store['layers'] }, k: LayerKey) => cur.layers[k]?.requested === ask;
   try {
     // the tile decoder is only loaded when a map is first needed
@@ -76,7 +80,10 @@ async function loadLayers(ask: BBox, keys: LayerKey[], view: BBox): Promise<void
       },
     }));
   } catch {
-    await Promise.all(keys.map((key) => fetchLayer(key, ask).then(
+    // without the tiles, a layer wider than Overpass is asked for is left out, and says why
+    const tooWide = keys.filter((k) => widestKm > OVERPASS_MAX_KM[k]);
+    if (tooWide.length) useStore.setState((cur) => ({ layers: { ...cur.layers, ...Object.fromEntries(tooWide.filter((k) => mine(cur, k)).map((k) => [k, { data: cur.layers[k]?.data, status: 'error' as const, error: `The map tiles could not be reached, and this view is too wide to ask for this layer another way (up to ${OVERPASS_MAX_KM[k]} km). Zoom in, or retry.`, requested: ask }])) } }));
+    await Promise.all(keys.filter((k) => !tooWide.includes(k)).map((key) => fetchLayer(key, ask).then(
       (data) => useStore.setState((cur) => (mine(cur, key) ? { layers: { ...cur.layers, [key]: { data: { ...data, source: 'overpass' as const }, status: 'idle' as const } } } : {})),
       (e) => useStore.setState((cur) => (mine(cur, key) ? { layers: { ...cur.layers, [key]: { data: cur.layers[key]?.data, status: 'error' as const, error: e instanceof Error ? e.message : 'Failed', requested: ask } } } : {})),
     )));
@@ -112,6 +119,16 @@ export const useStore = create<Store>((setState, get) => ({
   notice: '',
   placing: null,
   setPlacing: (placing) => setState({ placing }),
+  surprise: '',
+  goTo: (place, widthKm, why) => {
+    ++placeId;
+    get().set((p) => {
+      p.place = place;
+      p.region = { lat: place.lat, lon: place.lon, widthKm: clampKm(widthKm) };
+      p.features.overrides = Object.fromEntries(Object.entries(p.features.overrides).filter(([k]) => k.startsWith('custom-')));
+    });
+    setState({ searchResults: [], layers: {}, landmarks: { status: 'idle' }, notice: '', surprise: why ?? '' });
+  },
 
   set: (fn) =>
     setState((s) => {
@@ -139,11 +156,11 @@ export const useStore = create<Store>((setState, get) => ({
     ++placeId;
     const place: Place = { name: hit.name, lat: hit.lat, lon: hit.lon, kind: hit.kind, location: hit.location || undefined, bbox: hit.bbox };
     get().set((p) => { p.place = place; p.region = regionFor(place); p.features.overrides = Object.fromEntries(Object.entries(p.features.overrides).filter(([k]) => k.startsWith('custom-'))); offerPlace(p, place); });
-    setState({ searchIndex: i, layers: {}, landmarks: { status: 'idle' } });
+    setState({ searchIndex: i, layers: {}, landmarks: { status: 'idle' }, surprise: '' });
   },
 
   searchPlace: async (q) => {
-    setState({ busy: 'Searching…', notice: '' });
+    setState({ busy: 'Searching…', notice: '', surprise: '' });
     try {
       const at = parseLatLon(q);
       if (at) {
@@ -165,7 +182,7 @@ export const useStore = create<Store>((setState, get) => ({
 
   ensureData: (view, widestKm) => {
     const s = get();
-    const enabled = LAYER_KEYS.filter((k) => s.project.layers[k].enabled && widestKm <= LAYER_MAX_KM[k]);
+    const enabled = LAYER_KEYS.filter((k) => s.project.layers[k].enabled && widestKm <= layerMaxKm(k, s.project.layers[k]));
     const todo = enabled.filter((key) => {
       const st = s.layers[key];
       if (covered(st?.data?.covers, view)) return false;
@@ -175,7 +192,7 @@ export const useStore = create<Store>((setState, get) => ({
     if (todo.length) {
       const ask = padBBox(view, PAD);
       setState((cur) => ({ layers: { ...cur.layers, ...Object.fromEntries(todo.map((k) => [k, { data: cur.layers[k]?.data, status: 'loading' as const, requested: ask }])) } }));
-      void loadLayers(ask, todo, view);
+      void loadLayers(ask, todo, view, widestKm);
     }
 
     if (!s.project.features.enabled || widestKm > LANDMARKS_MAX_KM) return;

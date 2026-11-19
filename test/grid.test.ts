@@ -149,3 +149,20 @@ describe('grid numbers go on the right edges', () => {
     expect(labels.filter((l) => l.text === '71').map((l) => l.edge).sort()).toEqual(['left', 'right']);
   });
 });
+
+describe('layers in wide views', () => {
+  it('buildings switch off past 4 km as before, unless drawn wide; Military draws them wide', async () => {
+    const { layerMaxKm, LAYER_MAX_KM, OVERPASS_MAX_KM } = await import('../src/city/types');
+    const big = (edit: (p: ReturnType<typeof cityProject>) => void = () => {}) => cityProject((q) => { q.region!.scale = 25000; edit(q); });
+    const has = (p: ReturnType<typeof cityProject>) => buildScene(p, cityData()).prims.some((x) => x.kind === 'path' && x.part === 'buildings');
+    expect(Math.max(viewOf(big())!.widthKm, viewOf(big())!.heightKm)).toBeGreaterThan(LAYER_MAX_KM.buildings);
+    expect(has(big())).toBe(false);
+    expect(has(big((q) => { q.layers.buildings.wide = true; }))).toBe(true);
+    const mil = big();
+    applyLook(mil, lookById('military')!);
+    expect(has(mil)).toBe(true);
+    expect(layerMaxKm('buildings', { wide: true })).toBeGreaterThanOrEqual(Math.max(viewOf(mil)!.widthKm, viewOf(mil)!.heightKm));
+    // Overpass, the fallback, is never asked for more than before
+    expect(OVERPASS_MAX_KM).toEqual(LAYER_MAX_KM);
+  });
+});

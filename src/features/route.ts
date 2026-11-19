@@ -17,6 +17,8 @@ export interface RouteSettings {
   style: RouteStyle;
   /** a smooth curve through the stops, or straight legs */
   curved: boolean;
+  /** follow the streets between stops (found in the map's own street data); a leg it cannot find is drawn as above */
+  streets: boolean;
   /** an arrowhead in the middle of each leg */
   arrows: boolean;
   /** put the stop's number in front of its name on the map */
@@ -29,7 +31,7 @@ export interface RouteSettings {
 }
 
 export const defaultRoute = (pen: string): RouteSettings => ({
-  enabled: false, stops: [], pen, weightMm: 0.78, style: 'dotted', curved: true, arrows: true, numbers: true, key: true, keySizePt: 10, clearMm: 1,
+  enabled: false, stops: [], pen, weightMm: 0.78, style: 'dotted', curved: true, streets: false, arrows: true, numbers: true, key: true, keySizePt: 10, clearMm: 1,
 });
 
 /** The stops that still exist, in route order (a landmark that was removed drops out). */

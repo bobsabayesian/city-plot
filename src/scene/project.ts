@@ -75,7 +75,9 @@ export type Align = 'left' | 'center' | 'right';
 export type FontKey = 'sans' | 'serif';
 
 export type Placement = 'top' | 'bottom';
-export type InfoKey = 'scale' | 'extent';
+/** what an info cell shows: the area covered, the scale (1:n), a scale bar, or a bar of minutes on foot */
+export type InfoKey = 'scale' | 'extent' | 'bar' | 'walk';
+export const INFO_KEYS: InfoKey[] = ['extent', 'scale', 'bar', 'walk'];
 export type NorthStyle = 'arrow' | 'circle' | 'compass' | 'rose';
 export type Corner = 'tl' | 'tr' | 'bl' | 'br';
 
@@ -88,10 +90,18 @@ export interface InfoItem {
 }
 
 export interface TitleBlock { visible: boolean; value?: string; sizePt: number; placement: Placement; pen: string }
-export interface LocationBlock extends TitleBlock { showCoords: boolean }
+export type CoordFormat = 'decimal' | 'dms';
+export interface LocationBlock extends TitleBlock {
+  showCoords: boolean;
+  /** 47.6062° N, or 47°36′22″ N */
+  coordFormat: CoordFormat;
+}
 export type TitleAlign = 'inherit' | 'left' | 'center' | 'right' | 'justify';
 export type TitleStyle = 'fill' | 'outline' | 'outlineFill';
+/** A cartouche: a frame round the title and the text that goes with it. */
+export type TitleFrame = 'none' | 'box' | 'double' | 'corners';
 export interface TitleSettings extends TitleBlock {
+  frame: TitleFrame;
   /** 'inherit' follows the text alignment; 'justify' stretches the title across the content width */
   align: TitleAlign;
   style: TitleStyle;
@@ -248,13 +258,15 @@ export const defaultProject = (): Project => ({
     font: 'sans',
     trackingEm: 0.12,
     align: 'left',
-    title: { visible: true, sizePt: 60, placement: 'bottom', pen: PEN_BLACK, align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: PEN_BLACK, fillDensity: 'solid' },
-    location: { visible: true, sizePt: 18, placement: 'bottom', showCoords: true, pen: PEN_BLACK },
+    title: { visible: true, sizePt: 60, placement: 'bottom', pen: PEN_BLACK, align: 'inherit', style: 'fill', outlineMm: 0.35, fillPen: PEN_BLACK, fillDensity: 'solid', frame: 'none' },
+    location: { visible: true, sizePt: 18, placement: 'bottom', showCoords: true, coordFormat: 'decimal', pen: PEN_BLACK },
     info: {
       visible: true, pen: PEN_BLACK, sizePt: 22, placement: 'bottom', layout: 'row',
       items: [
         { key: 'extent', visible: true, label: 'Area' },
         { key: 'scale', visible: true, label: 'Scale' },
+        { key: 'bar', visible: false, label: 'Scale bar' },
+        { key: 'walk', visible: false, label: 'On foot' },
       ],
     },
   },

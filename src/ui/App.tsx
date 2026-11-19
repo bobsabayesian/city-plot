@@ -16,6 +16,7 @@ import type { Scene } from '../scene/types';
 import { DEFAULT_SPEED, formatDuration, formatLength, loadSpeed, planPlot, storeSpeed, type PlotterSpeed } from '../export/plan';
 import { LooksGroup } from './LooksGroup';
 import { RouteGroup } from './RouteGroup';
+import { surprise } from '../surprise';
 import { GridGroup } from './GridGroup';
 import type { Part } from '../scene/types';
 import { isDarkPaper } from '../scene/pens';
@@ -26,8 +27,8 @@ import { PagePanel } from './PagePanel';
 import { FEATURE_PEN_LABELS, inkWidth, penFor } from '../scene/pens';
 import type { FeaturePenKey } from '../features/types';
 import { inverseMercator, mercator } from '../geo/project';
-import { DEFAULT_WATERLINES, isAreaLayer, LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_LABELS, LAYER_MAX_KM, type LayerKey, type WaterlineStyle } from '../city/types';
-import { coasterPreset, MAP_SCALES, sizeShape, REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
+import { DEFAULT_WATERLINES, isAreaLayer, LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_LABELS, LAYER_MAX_KM, LAYER_WIDE_MAX_KM, layerMaxKm, type LayerKey, type WaterlineStyle } from '../city/types';
+import { coasterPreset, MAP_SCALES, sizeShape, REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement, type CoordFormat, type TitleFrame } from '../scene/project';
 
 const PlaceRow = ({ value, onChange }: { value: Placement; onChange: (v: Placement) => void }) => (
   <Row label="Position">
@@ -84,6 +85,14 @@ const PARTS: Record<Part, { group: string; label: string; focus?: string }> = {
   grid: { group: 'grid', label: 'Grid' },
 };
 
+/** What the bar says while a place's map data is on its way: one of a few lines, always the same one for a place. */
+export function fetchingLine(name: string): string {
+  const lines = [`Fetching the streets of ${name}…`, `Unrolling the map of ${name}…`, `Tracing ${name}, street by street…`, `Sharpening the pens for ${name}…`];
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return lines[h % lines.length]!;
+}
+
 /** The part of the map under the pointer, if any: a landmark's own label first, then the part an element draws. */
 function clickTarget(target: EventTarget | null): { group: string; label: string; focus: string } | undefined {
   const el = target instanceof Element ? target : null;
@@ -123,8 +132,15 @@ export function App() {
 function Editor({ narrow }: { narrow: boolean }) {
   const { project: p, set, setRegion, searchResults, searchIndex, choosePlace, searchPlace, ensureData, retryData, addCustom, openProject, busy, notice } = useStore();
   const layerState = useStore((s) => s.layers);
+  const fetching = Object.values(layerState).some((st) => st?.status === 'loading');
   const landmarkState = useStore((s) => s.landmarks);
   const [tab, setTab] = useState<'settings' | 'map'>('settings');
+  const surpriseWhy = useStore((s) => s.surprise);
+  const surpriseMe = () => {
+    const s = surprise(useStore.getState().project.place?.name);
+    useStore.getState().goTo({ name: s.name, lat: s.lat, lon: s.lon, kind: 'city', location: s.location }, s.widthKm, s.why);
+    setQuery('');
+  };
   // placing a photo by hand: on a phone, show the map for the tap, then go back to the settings
   const placing = useStore((s) => s.placing);
   const wasPlacing = useRef(false);
@@ -360,7 +376,15 @@ function Editor({ narrow }: { narrow: boolean }) {
   }, [pendingEdit]);
   const status = (key: LayerKey): ReactNode => {
     const st = layerState[key];
-    if (widest > LAYER_MAX_KM[key]) return <span className="hint">Too wide: shown at {LAYER_MAX_KM[key]} km or less across. Zoom in.</span>;
+    const st0 = p.layers[key];
+    if (widest > layerMaxKm(key, st0)) {
+      const canWiden = !st0.wide && LAYER_WIDE_MAX_KM[key] > LAYER_MAX_KM[key];
+      return (
+        <span className="hint">
+          Too wide: shown at {layerMaxKm(key, st0)} km or less across. Zoom in{canWiden ? <>, or <button type="button" className="link" onClick={() => set((x) => { x.layers[key].wide = true; })}>draw it up to {LAYER_WIDE_MAX_KM[key]} km</button> (busier)</> : ''}.
+        </span>
+      );
+    }
     if (st?.status === 'loading') return <span className="hint">Loading…</span>;
     if (st?.status === 'error') return <span className="err">{st.error} <button onClick={retryData}>Retry</button></span>;
     if (st?.data?.truncated) return <span className="hint">Very dense: the map server cut this layer short. Zoom in for all of it.</span>;
@@ -387,6 +411,7 @@ function Editor({ narrow }: { narrow: boolean }) {
             </form>
             {notice && <div className="err">{notice}</div>}
             <div className="hint">For example Seattle, Dixie Heights High School, 10 Downing Street, or 47.62, -122.35.</div>
+            <div className="row surprise-row"><button type="button" onClick={surpriseMe}>Surprise me</button><span className="hint">A city with a street plan worth plotting.</span></div>
           </section>
           <div className="start-more">
             <div className="open">
@@ -439,6 +464,12 @@ function Editor({ narrow }: { narrow: boolean }) {
                 <span>{[r.kind, r.location].filter(Boolean).join(' · ')}</span>
               </button>
             ))}
+          </div>
+        )}
+        {surpriseWhy && p.place && (
+          <div className="row surprise-row">
+            <span className="hint" style={{ margin: 0, flex: 1 }}><b>{p.place.name}</b>: {surpriseWhy}.</span>
+            <button type="button" onClick={surpriseMe}>Another</button>
           </div>
         )}
         {!p.place && <div className="hint">Search for a city or a landmark to start. You can then move the map and set how much ground it covers.</div>}
@@ -504,7 +535,16 @@ function Editor({ narrow }: { narrow: boolean }) {
                   <Row label="Fill">
                     <select value={st.fill} onChange={(e) => set((x) => { x.layers[key].fill = e.target.value as typeof st.fill; })}>
                       <option value="off">Outline only</option><option value="light">Light hatching</option><option value="medium">Medium hatching</option><option value="solid">Solid hatching</option>
+                      {key === 'buildings' && <option value="height">Hatching by height</option>}
                     </select>
+                  </Row>
+                )}
+                {key === 'buildings' && st.fill === 'height' && <div className="hint">Taller buildings are hatched more densely: under 15 m outlines only, then light, medium, and solid above 120 m.</div>}
+                {LAYER_WIDE_MAX_KM[key] > LAYER_MAX_KM[key] && (
+                  <Row label="Wide views">
+                    <label title={`Usually drawn up to ${LAYER_MAX_KM[key]} km across; this draws it up to ${LAYER_WIDE_MAX_KM[key]} km, for field maps at 1:25,000 or 1:50,000. Busier, and slower to plot.`}>
+                      <input type="checkbox" checked={!!st.wide} onChange={(e) => set((x) => { x.layers[key].wide = e.target.checked || undefined; })} /> Up to {st.wide ? LAYER_WIDE_MAX_KM[key] : LAYER_MAX_KM[key]} km{st.wide ? '' : ` (usual; tick for ${LAYER_WIDE_MAX_KM[key]})`}
+                    </label>
                   </Row>
                 )}
                 {key === 'water' && (() => {
@@ -708,7 +748,7 @@ function Editor({ narrow }: { narrow: boolean }) {
         })}
         </Group>
 
-        <RouteGroup bbox={view?.bbox} />
+        <RouteGroup bbox={view?.bbox} routeMisses={composed.routeMisses} />
 
         {region && view && <GridGroup scale={view.scale} lat={region.lat} lon={region.lon} />}
 
@@ -764,6 +804,11 @@ function Editor({ narrow }: { narrow: boolean }) {
               <option value="outlineFill">Outline with fill</option>
             </select>
           </Row>
+          <Row label="Frame">
+            <select value={p.text.title.frame} data-edit="frame" onChange={(e) => set((x) => { x.text.title.frame = e.target.value as TitleFrame; })}>
+              <option value="none">None</option><option value="box">Ruled box</option><option value="double">Double rule</option><option value="corners">Corner brackets</option>
+            </select>
+          </Row>
           <Row label={p.text.title.style === 'fill' ? 'Pen' : 'Outline pen'}><PenSelect pens={p.pens} value={p.text.title.pen} onChange={(id) => set((x) => { x.text.title.pen = id!; })} /></Row>
           {p.text.title.style !== 'fill' && (
             <Row label="Outline weight"><input type="number" min={0.1} max={3} step={0.05} value={p.text.title.outlineMm} onChange={(e) => set((x) => { x.text.title.outlineMm = Math.max(0.1, +e.target.value || 0.35); })} /><span className="unit">mm</span></Row>
@@ -783,7 +828,15 @@ function Editor({ narrow }: { narrow: boolean }) {
         <div className="field">
           <Row label="Text"><input type="text" data-edit="location" placeholder={auto.location || 'e.g. Washington, USA'} value={p.text.location.value ?? ''} onChange={(e) => set((x) => { x.text.location.value = e.target.value || undefined; })} />
             <input type="checkbox" title="Show" checked={p.text.location.visible} onChange={(e) => set((x) => { x.text.location.visible = e.target.checked; })} /></Row>
-          <Row label="Coordinates"><input type="checkbox" checked={p.text.location.showCoords} onChange={(e) => set((x) => { x.text.location.showCoords = e.target.checked; })} /></Row>
+          <Row label="Coordinates">
+            <input type="checkbox" checked={p.text.location.showCoords} onChange={(e) => set((x) => { x.text.location.showCoords = e.target.checked; })} />
+            {p.text.location.showCoords && (
+              <select value={p.text.location.coordFormat} aria-label="Coordinate style" onChange={(e) => set((x) => { x.text.location.coordFormat = e.target.value as CoordFormat; })}>
+                <option value="decimal">47.6062° N</option>
+                <option value="dms">47°36′22″ N</option>
+              </select>
+            )}
+          </Row>
           <Row label="Size (pt)"><input type="number" min={6} max={120} value={p.text.location.sizePt} onChange={(e) => set((x) => { x.text.location.sizePt = +e.target.value || 12; })} /></Row>
           <Row label="Pen"><PenSelect pens={p.pens} value={p.text.location.pen} onChange={(id) => set((x) => { x.text.location.pen = id!; })} /></Row>
           <PlaceRow value={p.text.location.placement} onChange={(v) => set((x) => { x.text.location.placement = v; })} />
@@ -929,7 +982,7 @@ function Editor({ narrow }: { narrow: boolean }) {
                 {formatDuration(plan.totalS)} to plot · {plan.pens.length} {plan.pens.length === 1 ? 'pen' : 'pens'}{plan.swaps ? `, ${plan.swaps} ${plan.swaps === 1 ? 'swap' : 'swaps'}` : ''}
               </span>{' '}
               {!watching && plan.pens.length > 0 && <button type="button" className="link" onClick={() => setWatching(true)}>▶ Watch it plot</button>}
-            </> : plotSvg ? 'Click-to-edit is off here' : 'Drawing…') : hovered ? `Click to edit: ${hovered}` : region ? 'Drag to move, scroll to zoom, click a part to edit it' : 'Search for a place to start'}</span>
+            </> : plotSvg ? 'Click-to-edit is off here' : 'Drawing…') : hovered ? `Click to edit: ${hovered}` : region ? (fetching ? fetchingLine(p.place?.name ?? 'the map') : 'Drag to move, scroll to zoom, click a part to edit it') : 'Search for a place to start'}</span>
             <span className="bar-actions">
               {saver.mine && saver.code && (
                 <button type="button" disabled={!!saver.busy} onClick={() => void saver.save(true)} title={`Replace the saved copy under ${saver.code}: the same code and link, with these changes`}>

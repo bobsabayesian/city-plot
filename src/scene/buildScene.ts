@@ -1,14 +1,17 @@
 import { fitBBox, inverseMercator, mercator, rotateFit, type BBox, type Fit } from '../geo/project';
 import { circlePolygon, clipPolyline, clipPolylineConvex, roundRectPolygon, type Rect, type XY } from '../geo/clip';
-import { formatCoords, formatKm, formatMiles } from '../geo/format';
+import { formatCoords, formatCoordsDms, formatKm, formatMiles } from '../geo/format';
 import { layerPrims, waterLines, type MapClip } from '../city/draw';
-import { LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from '../city/types';
+import { LAYER_KEYS, LAYER_MAX_KM, layerMaxKm, type LayerData, type LayerKey } from '../city/types';
 import { landmarkPrims } from '../features/draw';
 import { boxAt } from '../features/select';
 import type { LandmarkEntry, LandmarkPlacement } from '../features/select';
 import { penKeyOf, type Landmark } from '../features/types';
 import { northBox, northPrims } from './north';
 import { handPrim } from './hand';
+import { graphFor, streetPath } from '../features/streetRoute';
+import { barPrims, niceDistance, niceWalk, textWidthMm } from './scalebar';
+import { cartouche } from './cartouche';
 import { autoSpacingKm, gridGeometry, gridLines } from './grid';
 import { legArrow, routeDash, routeHalos, routeLegs, routeStops, stopLabel, trimLeg } from '../features/route';
 import { cutOutHalos } from '../features/halo';
@@ -62,10 +65,13 @@ export function autoValues(p: Project, view?: View) {
   return {
     title: p.place?.name ?? DEFAULT_TITLE,
     location: p.place?.location ?? '',
-    coords: c ? formatCoords(c.lat, c.lon) : '',
+    coords: c ? (p.text.location.coordFormat === 'dms' ? formatCoordsDms(c.lat, c.lon) : formatCoords(c.lat, c.lon)) : '',
     info: {
       extent: view ? `${dist(view.widthKm)} × ${dist(view.heightKm)}` : '',
       scale: view ? `1:${view.scale.toLocaleString('en-US')}` : '',
+      // drawn as bars; the text is what the settings show as the automatic value
+      bar: view ? 'a bar' : '',
+      walk: view ? 'a bar of minutes' : '',
     } as Record<InfoItem['key'], string>,
   };
 }
@@ -84,7 +90,7 @@ export interface View {
   /** the map's scale as 1:scale, rounded */
   scale: number;
 }
-export interface Composed { scene: Scene; view?: View; landmarks?: LandmarkEntry[]; pool?: LandmarkPlacement['pool']; open?: LandmarkPlacement['open'] }
+export interface Composed { scene: Scene; view?: View; landmarks?: LandmarkEntry[]; pool?: LandmarkPlacement['pool']; open?: LandmarkPlacement['open']; routeMisses?: number }
 
 const roundScale = (s: number) => { const q = s >= 2000 ? 100 : 10; return Math.max(1, Math.round(s / q) * q); };
 
@@ -109,6 +115,14 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
   const auto = autoValues(p);
   // scale and extent need the map frame, which needs the text blocks' heights: they are filled in once the frame is known
   let infoAuto = auto.info;
+  /** map mm per metre of ground, for the scale bars; known once the frame is */
+  let mmPerM = 0;
+  // a cartouche frames the blocks on the title's side of the map; their text is set in from the frame
+  const framed: Placement | undefined = t.title.visible && t.title.frame !== 'none' ? t.title.placement : undefined;
+  const FRAME_PAD = 4;
+  const L = (pl: Placement) => contentL + (pl === framed ? FRAME_PAD : 0);
+  const R = (pl: Placement) => contentR - (pl === framed ? FRAME_PAD : 0);
+  const X = (pl: Placement) => (t.align === 'left' ? L(pl) : t.align === 'right' ? R(pl) : (L(pl) + R(pl)) / 2);
   const text = (penId: string, s: string, y: number, sizeMm: number, extra: Partial<Extract<Prim, { kind: 'text' }>> = {}, x = tx): Prim => ({
     kind: 'text', text: s, x, y, anchor, sizeMm, trackingMm: sizeMm * t.trackingEm, fontFamily, fontKey: t.font, color: colorOf(penId), pen: penId, ...extra,
   });
@@ -130,7 +144,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
         const row = two ? i % rows : i;
         const line = `${p.route.numbers ? `${i + 1}. ` : ''}${s.name}${s.note?.trim() ? ` — ${s.note.trim()}` : ''}`;
         const extra = two ? { anchor: 'start' as const } : {};
-        const x = two ? contentL + col * (innerW / 2) : tx;
+        const x = two ? L('bottom') + col * ((R('bottom') - L('bottom')) / 2) : X('bottom');
         return text(p.route.pen, line, y + row * lineH + size * 0.72, size, { trackingMm: size * t.trackingEm * 0.4, ...extra }, x);
       }),
     });
@@ -142,10 +156,11 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     const size = ts.sizePt * PT;
     const align = ts.align === 'inherit' ? t.align : ts.align;
     const justify = align === 'justify';
+    const pl = ts.placement;
     const where = {
       anchor: (justify || align === 'left' ? 'start' : align === 'right' ? 'end' : 'middle') as 'start' | 'middle' | 'end',
-      x: justify || align === 'left' ? contentL : align === 'right' ? contentR : (contentL + contentR) / 2,
-      ...(justify ? { fitWidthMm: innerW } : {}),
+      x: justify || align === 'left' ? L(pl) : align === 'right' ? R(pl) : (L(pl) + R(pl)) / 2,
+      ...(justify ? { fitWidthMm: R(pl) - L(pl) } : {}),
     };
     const { x: titleX, ...place } = where;
     blocks[ts.placement].push({
@@ -176,8 +191,9 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
       draw: (y) => {
         const out: Prim[] = [];
         let cy = y;
-        if (loc) { out.push(text(t.location.pen, loc, cy + size * 0.72, size)); cy += size * 1.25; }
-        if (coords) out.push(text(t.location.pen, coords, cy + small * 0.72, small, { opacity: 0.7 }));
+        const lx = X(t.location.placement);
+        if (loc) { out.push(text(t.location.pen, loc, cy + size * 0.72, size, {}, lx)); cy += size * 1.25; }
+        if (coords) out.push(text(t.location.pen, coords, cy + small * 0.72, small, { opacity: 0.7 }, lx));
         return out;
       },
     });
@@ -192,19 +208,50 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     const cell = ls * 1.5 + size * 0.75;
     const column = t.info.layout === 'column';
     const colGap = size * 0.6;
-    const cellDraw = (it: (typeof items)[number], y: number, x: number): Prim[] => [
-      text(t.info.pen, it.label.toUpperCase(), y + ls * 0.72, ls, { opacity: 0.65 }, x),
-      text(t.info.pen, it.value || infoAuto[it.key], y + ls * 1.5 + size * 0.72, size, { trackingMm: size * t.trackingEm * 0.6 }, x),
-    ];
+    const pl = t.info.placement;
+    const cellW = column ? R(pl) - L(pl) : (R(pl) - L(pl)) / items.length;
+    const cellDraw = (it: (typeof items)[number], y: number, x: number): Prim[] => {
+      const head = text(t.info.pen, it.label.toUpperCase(), y + ls * 0.72, ls, { opacity: 0.65 }, x);
+      const base = y + ls * 1.5 + size * 0.72;
+      if ((it.key === 'bar' || it.key === 'walk') && !it.value && mmPerM > 0) return [head, ...barCell(it.key, x, y + ls * 1.5, base)];
+      // values too long for their cells are set smaller (all of the row alike) rather than run into the next one
+      const value = it.value || infoAuto[it.key];
+      const fit = column ? fitOf(value) : rowFit();
+      return [head, text(t.info.pen, value, y + ls * 1.5 + size * fit * 0.72, size * fit, { trackingMm: track * fit }, x)];
+    };
+    const track = size * t.trackingEm * 0.6;
+    const fitOf = (v: string) => Math.min(1, (cellW * 0.94) / Math.max(1e-6, textWidthMm(v, size, track, t.font === 'serif')));
+    const isBar = (it: (typeof items)[number]) => (it.key === 'bar' || it.key === 'walk') && !it.value;
+    const rowFit = () => Math.min(1, ...items.filter((it) => !isBar(it)).map((it) => fitOf(it.value || infoAuto[it.key])));
+    /** a scale bar or a bar of minutes on foot, with its length written after it, in the cell at x */
+    const barCell = (key: 'bar' | 'walk', x: number, top: number, base: number): Prim[] => {
+      const lab = size * 0.6;
+      const labTrack = lab * t.trackingEm * 0.5;
+      const room = cellW * 0.92;
+      const labelW = (s: string) => lab * 0.6 + textWidthMm(s, lab, labTrack, t.font === 'serif');
+      const nice = (max: number) => (key === 'bar' ? niceDistance(max, mmPerM, p.units === 'imperial') : niceWalk(max, mmPerM));
+      // the longest round length that fits in the cell with its own label after it
+      let n = nice(room);
+      while (n && n.m * mmPerM + labelW(n.label) > room) n = nice(n.m * mmPerM * 0.999);
+      if (!n) return [];
+      const len = n.m * mmPerM;
+      const total = len + labelW(n.label);
+      const x0 = t.align === 'left' ? x : t.align === 'right' ? x - total : x - total / 2;
+      const barH = Math.max(1.2, size * 0.28);
+      const pen = penFor(p.pens, t.info.pen);
+      return [
+        ...barPrims(x0, top + (size * 0.75 - barH) / 2, len, barH, key === 'bar' ? 4 : 2, pen.color, pen.id, inkWidth(pen)),
+        { kind: 'text', text: n.label, x: x0 + len + lab * 0.6, y: base - (size - lab) * 0.36, anchor: 'start', sizeMm: lab, trackingMm: labTrack, fontFamily, fontKey: t.font, color: pen.color, pen: pen.id },
+      ];
+    };
     blocks[t.info.placement].push({
       part: 'info',
       height: column ? items.length * cell + (items.length - 1) * colGap : cell,
       gapAfter: size * 0.6,
       draw: (y) => {
-        if (column) return items.flatMap((it, i) => cellDraw(it, y + i * (cell + colGap), tx));
-        const cw = innerW / items.length;
+        if (column) return items.flatMap((it, i) => cellDraw(it, y + i * (cell + colGap), X(pl)));
         return items.flatMap((it, i) => {
-          const x = t.align === 'left' ? contentL + i * cw : t.align === 'right' ? contentL + (i + 1) * cw : contentL + (i + 0.5) * cw;
+          const x = t.align === 'left' ? L(pl) + i * cellW : t.align === 'right' ? L(pl) + (i + 1) * cellW : L(pl) + (i + 0.5) * cellW;
           return cellDraw(it, y, x);
         });
       },
@@ -213,8 +260,19 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
 
   // Stack the blocks from the top and bottom margins; they are drawn once the map frame is known.
   const queue: (() => Prim[])[] = [];
+  /** the cartouche, once its blocks are stacked: from the top of the first to the bottom of the last, with room round them */
+  const frameAround = (top: number, bottom: number) => queue.push(() => cartouche(contentL, top, contentR - contentL, bottom - top, t.title.frame, penFor(p.pens, t.title.pen)).map(tag('title')));
   let topCursor = mg.top;
-  for (const b of blocks.top) { const y = topCursor; queue.push(() => b.draw(y).map(tag(b.part))); topCursor += b.height + b.gapAfter; }
+  if (framed === 'top' && blocks.top.length) {
+    const start = topCursor;
+    topCursor += FRAME_PAD;
+    blocks.top.forEach((b, i) => { const y = topCursor; queue.push(() => b.draw(y).map(tag(b.part))); topCursor += b.height + (i < blocks.top.length - 1 ? b.gapAfter : 0); });
+    topCursor += FRAME_PAD;
+    frameAround(start, topCursor);
+    topCursor += Math.max(4, blocks.top.at(-1)!.gapAfter * 0.6);
+  } else {
+    for (const b of blocks.top) { const y = topCursor; queue.push(() => b.draw(y).map(tag(b.part))); topCursor += b.height + b.gapAfter; }
+  }
 
   let bottomCursor = H - mg.bottom;
   if (p.showWatermark) {
@@ -223,15 +281,32 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     queue.push(() => [tag('watermark')(text(p.watermarkPen, WATERMARK_TEXT, y, size, { trackingMm: size * 0.04, opacity: 0.55 }))]);
     bottomCursor -= size * 2.4;
   }
-  for (const b of [...blocks.bottom].reverse()) {
-    bottomCursor -= b.height;
-    const y = bottomCursor;
-    queue.push(() => b.draw(y).map(tag(b.part)));
-    bottomCursor -= b.gapAfter;
+  if (framed === 'bottom' && blocks.bottom.length) {
+    const end = bottomCursor;
+    bottomCursor -= FRAME_PAD;
+    const rev = [...blocks.bottom].reverse();
+    rev.forEach((b, i) => {
+      bottomCursor -= b.height;
+      const y = bottomCursor;
+      queue.push(() => b.draw(y).map(tag(b.part)));
+      if (i < rev.length - 1) bottomCursor -= b.gapAfter;
+    });
+    bottomCursor -= FRAME_PAD;
+    frameAround(bottomCursor, end);
+    bottomCursor -= Math.max(4, blocks.bottom[0]!.gapAfter * 0.6);
+  } else {
+    for (const b of [...blocks.bottom].reverse()) {
+      bottomCursor -= b.height;
+      const y = bottomCursor;
+      queue.push(() => b.draw(y).map(tag(b.part)));
+      bottomCursor -= b.gapAfter;
+    }
   }
 
   // ---- map
   let view: View | undefined;
+  /** legs of a route along the streets that had to be drawn as curves (no street path found) */
+  let routeMisses: number | undefined;
   let landmarks: LandmarkEntry[] | undefined;
   let pool: LandmarkPlacement['pool'] | undefined;
   let open: LandmarkPlacement['open'] | undefined;
@@ -254,6 +329,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
       scale: roundScale(groundPerMm * 1000),
     };
     infoAuto = autoValues(p, view).info;
+    mmPerM = frame.w / (view.widthKm * 1000);
   }
   if (!layoutOnly) for (const draw of queue) prims.push(...draw());
 
@@ -290,7 +366,17 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     // The memory route: its legs (stopping short of each marker) and the full line, which labels keep off.
     const markerR = Math.min(W, H) * 0.0045;
     const stopPts = stops.map((s) => fit.toMm(s.lat, s.lon));
-    const legs = stopPts.length > 1 ? routeLegs(stopPts, p.route.curved) : [];
+    let legs = stopPts.length > 1 ? routeLegs(stopPts, p.route.curved) : [];
+    // along the streets: each leg found in the map's street data; one it cannot find keeps its curve
+    if (p.route.streets && legs.length && data) {
+      const g = graphFor(data.layers);
+      routeMisses = 0;
+      legs = legs.map((leg, i) => {
+        const path = g && streetPath(g, stops[i]!, stops[i + 1]!);
+        if (!path) { routeMisses!++; return leg; }
+        return path.map(([la, lo]) => fit.toMm(la, lo));
+      });
+    }
     const routeLine = legs.flatMap((l, i) => (i ? l.slice(1) : l));
     const shown = legs.map((l) => trimLeg(l, markerR * 1.4 + 1.2)).filter((l) => l.length > 1);
     const stopNo = new Map(stops.map((s, i) => [s.id, i + 1]));
@@ -329,7 +415,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     for (const key of LAYER_KEYS) {
       const style = p.layers[key];
       const layer = data?.layers[key];
-      if (!style.enabled || !layer || widest > LAYER_MAX_KM[key]) continue;
+      if (!style.enabled || !layer || widest > layerMaxKm(key, style)) continue;
       prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame, clip, halos, moving));
     }
     // the kilometre grid over the map layers, cut around the labels; its numbers go in the margin, outside the frame
@@ -385,7 +471,7 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
 
   const cut = sizeShape(p);
   const shape: Scene['shape'] = cut?.shape === 'circle' ? { kind: 'circle' } : cut?.shape === 'roundrect' ? { kind: 'roundrect', radiusMm: cut.cornerMm ?? 0 } : undefined;
-  return { scene: { widthMm: W, heightMm: H, paper: p.paper, ...(shape ? { shape } : {}), prims }, view, landmarks, pool, open };
+  return { scene: { widthMm: W, heightMm: H, paper: p.paper, ...(shape ? { shape } : {}), prims }, view, landmarks, pool, open, routeMisses };
 }
 
 /** `moving`: the map is being dragged, zoomed or turned; slow extras (waterlines) are left out until it rests. */

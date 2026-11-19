@@ -33,6 +33,9 @@ export function fromFile(raw: unknown): Project {
   const p = mergeDefaults(defaultProject(), raw.project);
   if (!Array.isArray(p.custom)) p.custom = [];
   if (!Array.isArray(p.pens) || !p.pens.length) p.pens = defaultProject().pens;
+  // projects saved before an info item existed get it, switched off, at the end
+  if (!Array.isArray(p.text.info.items)) p.text.info.items = defaultProject().text.info.items;
+  for (const it of defaultProject().text.info.items) if (!p.text.info.items.some((x) => x.key === it.key)) p.text.info.items.push({ ...it, visible: false });
   return p;
 }
 
