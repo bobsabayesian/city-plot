@@ -7,6 +7,7 @@ import { useStore } from '../src/store';
 import { defaultProject } from '../src/scene/project';
 import { cityProject } from './fixture';
 import { routeStops } from '../src/features/route';
+import { composeScene } from '../src/scene/buildScene';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -286,5 +287,43 @@ describe('photos from a phone, by QR code', () => {
     expect(Object.keys(first).sort()).toEqual(['file', 'info']); // no thumbnail where the browser cannot draw one, and never the file itself
     expect(first.info).toMatchObject({ takenAt: '2014-06-21T15:42:07' });
     expect(text()).toContain('Sent 23 photos to your computer; 1 without a location');
+  });
+});
+
+describe('naming stops', () => {
+  const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
+  const type = async (input: HTMLInputElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  it('a stop made from a photo can be renamed in place, and still says when the photo was taken', async () => {
+    await show(cityProject((p) => {
+      p.custom = [{ id: 'custom-1', name: '8 Aug 2026', kind: 'custom', lat: 47.6, lon: -122.33, icon: 'dot', takenAt: '2026-08-08T10:00:00' }];
+      p.route = { ...p.route, enabled: true, stops: ['custom-1'] };
+    }));
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Memory route') && b.getAttribute('aria-expanded') !== null));
+    const group = host.querySelector('#group-route')!;
+    const name = group.querySelector('[aria-label="Name of stop 1"]') as HTMLInputElement;
+    expect(name.value).toBe('8 Aug 2026');
+    expect(group.textContent).not.toContain('Photo taken');
+    await type(name, 'FOB Pit');
+    expect(useStore.getState().project.custom[0]!.name).toBe('FOB Pit');
+    expect(group.textContent).toContain('Photo taken 8 Aug 2026');
+    // the new name is what the map and the key say
+    const texts = composeScene(useStore.getState().project, { layers: {}, landmarks: [] }).scene.prims.filter((x) => x.kind === 'text').map((x) => (x as { text: string }).text);
+    expect(texts).toContain('1. FOB Pit');
+  });
+
+  it('a photo waiting to be placed can be named first, and is placed under that name', async () => {
+    const { addPhotoStop, photoStopName } = await import('../src/features/photoStops');
+    const ph = { file: 'IMG_9.jpg', info: { takenAt: '2026-08-09T09:00:00' }, name: 'Gate 3' };
+    expect(photoStopName(ph)).toBe('Gate 3');
+    expect(photoStopName({ ...ph, name: '   ' })).toBe('9 Aug 2026');
+    const p = cityProject();
+    const id = addPhotoStop(p, ph, 47.6, -122.33);
+    expect(p.custom.find((c) => c.id === id)!.name).toBe('Gate 3');
   });
 });

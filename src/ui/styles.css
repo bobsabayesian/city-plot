@@ -210,3 +210,9 @@ button.big { padding: 14px 18px; font-size: 17px; border-radius: 8px; }
 .qr .code svg { width: 150px; height: 150px; }
 .qr .about { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .qr .about input { width: 100%; font-size: 12px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+/* a stop's name, edited in place: reads as the heading of its row until it is clicked */
+input[type=text].stop-name-input { flex: 1; min-width: 0; font-weight: 600; padding: 4px 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; }
+.stop .row input[type=text].stop-name-input { border-color: transparent; }
+.stop .row input[type=text].stop-name-input:hover { border-color: var(--line); }
+.stop .row input[type=text].stop-name-input:focus { border-color: var(--accent); background: var(--panel); }
+.unplaced input[type=text].stop-name-input { font-weight: 400; border-color: var(--line); background: var(--panel); }

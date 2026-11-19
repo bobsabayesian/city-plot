@@ -6,7 +6,8 @@ import type { Landmark } from './types';
 export const SAME_PLACE_M = 60;
 
 /** A photo to put on the route: its file name and what its EXIF says. */
-export interface PhotoIn { file: string; info: PhotoInfo }
+/** A photo to put on the route: its file name, what its EXIF says, and a name the user gave it (else it is named by its date). */
+export interface PhotoIn { file: string; info: PhotoInfo; name?: string }
 export interface PhotoResult {
   /** new stops, in route order */
   added: string[];
@@ -29,7 +30,7 @@ export const byTime = (a: PhotoIn, b: PhotoIn) => {
 };
 
 /** A stop's name from a photo: the day it was taken, else the file name without its extension. */
-export const photoStopName = (ph: PhotoIn) => (ph.info.takenAt ? photoDate(ph.info.takenAt) : ph.file.replace(/\.[^.]+$/, '') || 'Photo');
+export const photoStopName = (ph: PhotoIn) => ph.name?.trim() || (ph.info.takenAt ? photoDate(ph.info.takenAt) : ph.file.replace(/\.[^.]+$/, '') || 'Photo');
 
 /** The next free user-landmark id. */
 function nextId(p: Project): string {

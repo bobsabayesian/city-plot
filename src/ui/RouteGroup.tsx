@@ -3,7 +3,7 @@ import { Group } from './Group';
 import { PenSelect } from './PensPanel';
 import { routeStops, type RouteStyle } from '../features/route';
 import { addPhotos, addPhotoStop, byTime, photoStopName, routeRegion, type PhotoIn } from '../features/photoStops';
-import { readPhotoInfo } from '../photos';
+import { photoDate, readPhotoInfo } from '../photos';
 import { collectDrop, dropLink, openDrop, qrSvg } from '../drop';
 
 /** How often the computer looks for photos sent from the phone. */
@@ -111,6 +111,7 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
     [s[i], s[j]] = [s[j]!, s[i]!];
     x.route.stops = s;
   });
+  const rename = (id: string, v: string) => set((x) => { const c = x.custom.find((q) => q.id === id); if (c) c.name = v; });
   const note = (id: string, v: string) => set((x) => { const c = x.custom.find((q) => q.id === id); if (c) c.note = v || undefined; });
 
   return (
@@ -148,7 +149,8 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
           {unplaced.map((u) => (
             <div className="row unplaced" key={u.key}>
               {u.url && <img src={u.url} alt="" className="thumb" />}
-              <span className="stop-name">{photoStopName(u.ph)}</span>
+              <input type="text" className="stop-name-input" maxLength={80} aria-label="Name for this photo's stop" value={u.ph.name ?? photoStopName(u.ph)}
+                onChange={(e) => { const name = e.target.value; setUnplaced((list) => list.map((q) => (q.key === u.key ? { ...q, ph: { ...q.ph, name } } : q))); }} />
               <button type="button" onClick={() => useStore.getState().setPlacing({
                 label: photoStopName(u.ph),
                 done: (lat, lon) => {
@@ -169,14 +171,16 @@ export function RouteGroup({ bbox }: { bbox?: BBox }) {
           <div className="row">
             <span className="stop-no" aria-hidden="true">{i + 1}</span>
             {thumbs.get(s.id) && <img src={thumbs.get(s.id)} alt="" className="thumb" />}
-            <b className="stop-name">{s.name}</b>
+            <input type="text" className="stop-name-input" maxLength={80} aria-label={`Name of stop ${i + 1}`} data-edit={`route-name-${s.id}`}
+              placeholder={s.takenAt ? photoDate(s.takenAt) : 'Name'} value={s.name} onChange={(e) => rename(s.id, e.target.value)} />
+          </div>
+          <div className="row">
+            <input type="text" maxLength={80} placeholder="A note for the key" aria-label={`Note for ${s.name}`} data-edit={`route-note-${s.id}`} value={s.note ?? ''} onChange={(e) => note(s.id, e.target.value)} />
             <button type="button" title="Earlier" aria-label={`Move ${s.name} earlier`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
             <button type="button" title="Later" aria-label={`Move ${s.name} later`} disabled={i === stops.length - 1} onClick={() => move(i, 1)}>↓</button>
             <button type="button" title="Take off the route" aria-label={`Take ${s.name} off the route`} onClick={() => set((x) => { x.route.stops = x.route.stops.filter((id) => id !== s.id); })}>×</button>
           </div>
-          <div className="row">
-            <input type="text" maxLength={80} placeholder="A note for the key, e.g. where we met, 2009" aria-label={`Note for ${s.name}`} data-edit={`route-note-${s.id}`} value={s.note ?? ''} onChange={(e) => note(s.id, e.target.value)} />
-          </div>
+          {s.takenAt && s.name.trim() !== photoDate(s.takenAt) && <div className="hint" style={{ margin: 0 }}>Photo taken {photoDate(s.takenAt)}</div>}
           {p.features.overrides[s.id]?.hidden && <div className="hint" style={{ margin: 0 }}>Its marker is off (My landmarks); the route still passes through it.</div>}
         </div>
       ))}
