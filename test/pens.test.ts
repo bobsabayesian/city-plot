@@ -179,13 +179,14 @@ describe('plotter export draws heavy lines as passes of one pen', () => {
     const major = paths(prepareScene(buildScene(p, cityData()), 'plotter', fonts, { pens: p.pens })).filter((x) => x.pen === 'green' && x.widthMm === 0.2);
     expect(major).toHaveLength(passCount(effectiveWidth(0.78, 0.2), 0.2));
   });
-  it('dashes carry over to each pass', () => {
+  it('dashes are cut into real dashes for each pass (plotting software ignores dash patterns)', () => {
     const p = base((q) => { q.layers.paths = { enabled: true, pen: 'black', weightMm: 0.54, fill: 'off', style: 'dashed' }; });
     const d = cityData();
     d.layers.paths = { covers: d.layers.major!.covers, ways: [{ id: 'p', closed: false, pts: [47.6, -122.34, 47.61, -122.33] }] };
-    const dashed = paths(prepareScene(buildScene(p, d), 'plotter', fonts)).filter((x) => x.dash);
-    expect(dashed).toHaveLength(2);
-    expect(dashed.every((x) => x.dash!.length === 2)).toBe(true);
+    const out = paths(prepareScene(buildScene(p, d), 'plotter', fonts)).filter((x) => x.part === 'paths');
+    expect(out).toHaveLength(2);
+    expect(out.every((x) => !x.dash)).toBe(true);
+    for (const x of out) expect(x.d.split('M').length - 1).toBeGreaterThan(20);
   });
   it('layers collapse to one per pen at the pen width', () => {
     const p = base();

@@ -12,6 +12,19 @@ Pick a city or landmark, set how much ground the map covers, and style it for a 
 - **Looks**: Classic, Engraved chart, Blueprint, Nolli, Minimal and Kraft set the paper, pens, layers, type, border and
   north arrow in one click (`src/scene/looks.ts`), keeping the place, area, page and text; Undo is offered until the next change.
   The north arrow sits on clear paper: map lines and hatching are cut away under it.
+- **Hand**: a Steady ↔ Sketchy slider (in Look) draws the map lines as if inked by hand: a slow drift of the sheet, so
+  streets that meet still meet, and a tremor along each line, cut to the map again (`src/scene/hand.ts`). "Another take"
+  draws it with a new seed. Kraft uses it.
+- **Map scale**: Region → Scale fixes the map at 1:10,000, 1:25,000, 1:50,000 or 1:100,000; the width then follows the map
+  frame, so the scale stays true on any page size. Zooming the map by hand lets go of it.
+- **Grid**: a UTM kilometre grid (`src/scene/grid.ts`), numbered in the margin like a military or survey map (eastings
+  along the top and bottom, northings up the sides). The lines are the true UTM lines, so they lean slightly off north.
+  The **Military** look turns it on, with red roads, black buildings, blue water and green woods.
+- **Memory route**: join some of your own landmarks in order (Memory route group): a dotted line with an arrow on each leg,
+  numbered stops, map lines cleared either side, and a key under the map listing each stop with a short note
+  (`src/features/route.ts`).
+- **Dashes on the plotter**: plotting software ignores `stroke-dasharray`, so the plotter export cuts dashed lines into real
+  dashes, dotted lines into pen taps, and heavy dots into small discs (a tap and rings).
 - **Plot time**: the Plotter preview estimates how long the plot takes (pens in palette order, lines sorted to keep pen-up
   travel short, as plotting software does; `src/export/plan.ts`) and **Watch it plot** plays it back: the ink appears in plot
   order, with the pen moving between lines and pausing to swap pens. Plotter speeds are set under Export and kept in the browser.

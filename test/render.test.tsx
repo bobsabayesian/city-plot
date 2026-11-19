@@ -94,7 +94,7 @@ describe('the Look group', () => {
     await show(cityProject());
     await openLooks();
     const cards = [...host.querySelectorAll('button.look')];
-    expect(cards.map((c) => c.querySelector('b')?.textContent)).toEqual(['Classic', 'Engraved chart', 'Blueprint', 'Nolli', 'Minimal', 'Kraft']);
+    expect(cards.map((c) => c.querySelector('b')?.textContent)).toEqual(['Classic', 'Engraved chart', 'Blueprint', 'Nolli', 'Minimal', 'Military', 'Kraft']);
     for (const c of cards) expect(c.querySelector('svg')).not.toBeNull();
 
     const before = useStore.getState().project;
@@ -114,5 +114,65 @@ describe('the Look group', () => {
     expect(text()).toContain('Kraft applied.');
     await act(async () => { useStore.getState().set((p) => { p.text.title.value = 'Our town'; }); });
     expect(text()).not.toContain('Kraft applied.');
+  });
+});
+
+describe('the Memory route group', () => {
+  const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
+  const choose = async (sel: HTMLSelectElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(sel, value);
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+  const type = async (input: HTMLInputElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+  const group = () => host.querySelector('#group-route')!;
+
+  it('adds stops, puts them in order and keeps a note for each', async () => {
+    await show(cityProject((p) => {
+      p.custom = [
+        { id: 'custom-1', name: 'Home', kind: 'custom', lat: 47.6, lon: -122.33, icon: 'home' },
+        { id: 'custom-2', name: 'Cafe', kind: 'custom', lat: 47.61, lon: -122.34, icon: 'default' },
+      ];
+    }));
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Memory route') && b.getAttribute('aria-expanded') !== null));
+    expect(group().textContent).toContain('Turn on the switch');
+    await click(group().querySelector('[role="switch"]'));
+    const add = () => group().querySelector('select') as HTMLSelectElement;
+    await choose(add(), 'custom-2');
+    await choose(add(), 'custom-1');
+    expect(useStore.getState().project.route.enabled).toBe(true);
+    expect(useStore.getState().project.route.stops).toEqual(['custom-2', 'custom-1']);
+
+    await click(group().querySelector('[aria-label="Move Home earlier"]'));
+    expect(useStore.getState().project.route.stops).toEqual(['custom-1', 'custom-2']);
+
+    await type(group().querySelector('[aria-label="Note for Cafe"]') as HTMLInputElement, 'first date');
+    expect(useStore.getState().project.custom.find((c) => c.id === 'custom-2')!.note).toBe('first date');
+
+    await click(group().querySelector('[aria-label="Take Home off the route"]'));
+    expect(useStore.getState().project.route.stops).toEqual(['custom-2']);
+    expect(group().textContent).toContain('Add one more stop');
+  });
+});
+
+describe('the Scale picker', () => {
+  it('fixes the map at 1:25,000 and says what that means', async () => {
+    await show(cityProject());
+    await act(async () => { ([...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Region') && b.getAttribute('aria-expanded') !== null) as HTMLElement).click(); });
+    const sel = host.querySelector('[data-edit="scale"]') as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.textContent)).toEqual(expect.arrayContaining(['1:10,000', '1:25,000', '1:50,000', '1:100,000']));
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(sel, '25000');
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useStore.getState().project.region!.scale).toBe(25000);
+    expect(text()).toContain('Fixed at 1:25,000');
+    expect(text()).toContain('250 m on the ground');
   });
 });

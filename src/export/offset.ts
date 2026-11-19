@@ -199,3 +199,56 @@ export function offsetPath(d: string, offset: number): string {
     })
     .join('');
 }
+
+/** A dot is drawn as a pen tap: a stroke this short, so the plotter puts the pen down and lifts it again. */
+export const DOT_MM = 0.05;
+
+/**
+ * Path data cut into the dashes of an SVG dash pattern (alternating on and off lengths, mm), for a plotter: plotting
+ * software draws a path's geometry and ignores stroke-dasharray, so a dashed line would otherwise plot solid.
+ * An "on" length of 0 is a dot. The pattern runs on across the corners of each sub-path, as SVG does.
+ */
+export function dashPath(d: string, dash: number[]): string {
+  const pattern = dash.length % 2 ? [...dash, ...dash] : dash;
+  const total = pattern.reduce((a, b) => a + Math.max(0, b), 0);
+  if (!pattern.length || !(total > 0)) return d;
+  const out: string[] = [];
+  for (const s of flattenPath(d)) {
+    const pts = s.closed ? [...s.pts, s.pts[0]!] : s.pts;
+    let k = 0;
+    let left = Math.max(0, pattern[0]!);
+    let on = true;
+    let cur: Pt[] = [pts[0]!];
+    const emit = () => {
+      if (!on) return;
+      let piece = cur;
+      // a dot: a tap of the pen
+      if (piece.length === 1 || piece.every((q) => q[0] === piece[0]![0] && q[1] === piece[0]![1])) piece = [piece[0]!, [piece[0]![0] + DOT_MM, piece[0]![1]]];
+      out.push(piece.map(([x, y], i) => `${i ? 'L' : 'M'}${f(x)} ${f(y)}`).join(''));
+    };
+    for (let i = 1; i < pts.length; i++) {
+      let [ax, ay] = pts[i - 1]!;
+      const [bx, by] = pts[i]!;
+      let seg = Math.hypot(bx - ax, by - ay);
+      while (seg >= left) {
+        // the current dash or gap ends inside this segment
+        const t = seg ? left / seg : 0;
+        const px = ax + (bx - ax) * t, py = ay + (by - ay) * t;
+        cur.push([px, py]);
+        emit();
+        seg -= left;
+        [ax, ay] = [px, py];
+        k = (k + 1) % pattern.length;
+        left = Math.max(0, pattern[k]!);
+        on = !on;
+        cur = [[px, py]];
+      }
+      left -= seg;
+      cur.push([bx, by]);
+    }
+    // what is left at the end: a dash that has begun, or a dot when the pattern is dots (not an empty dash that only touches the end)
+    const begun = cur.some((q) => q[0] !== cur[0]![0] || q[1] !== cur[0]![1]);
+    if (on && (begun || pattern[k] === 0)) emit();
+  }
+  return out.join('');
+}

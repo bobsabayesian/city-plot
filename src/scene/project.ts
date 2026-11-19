@@ -4,6 +4,9 @@ import { DEFAULT_WATERLINES, LAYER_KEYS, type LayerKey, type LayerStyle, type St
 import { defaultPens, PEN_BLACK, PEN_BLUE, PEN_GREEN, type Pen } from './pens';
 import { defaultBorder, type BorderSettings } from './border';
 import type { HatchDensity } from './types';
+import { DEFAULT_HAND, type HandSettings } from './hand';
+import { defaultRoute, type RouteSettings } from '../features/route';
+import { defaultGrid, type GridSettings } from './grid';
 
 export type { StrokeStyle };
 
@@ -128,7 +131,15 @@ export interface Region {
   widthKm: number;
   /** degrees the map is turned clockwise from north-up (-180 to 180); the north arrow follows */
   rotationDeg?: number;
+  /**
+   * a fixed map scale, 1:scale (25000 for 1:25,000): the width then follows the map frame, so the scale stays true when
+   * the page size or margins change. Undefined = the width is set directly (dragging or zooming the map clears it).
+   */
+  scale?: number;
 }
+
+/** The standard map scales offered as fixed zooms. */
+export const MAP_SCALES = [10000, 25000, 50000, 100000] as const;
 
 /** Narrowest and widest region the controls offer. */
 export const REGION_MIN_KM = 0.25;
@@ -197,6 +208,12 @@ export interface Project {
   };
   showWatermark: boolean;
   watermarkPen: string;
+  /** map lines drawn as if by hand: 0 steady, 1 sketchy */
+  hand: HandSettings;
+  /** a line joining some of the user's own landmarks, in order */
+  route: RouteSettings;
+  /** a UTM kilometre grid over the map, numbered in the margin */
+  grid: GridSettings;
 }
 
 /**
@@ -243,6 +260,9 @@ export const defaultProject = (): Project => ({
   },
   showWatermark: true,
   watermarkPen: PEN_BLACK,
+  hand: { ...DEFAULT_HAND },
+  route: defaultRoute(PEN_BLACK),
+  grid: defaultGrid(PEN_BLACK),
 });
 
 /** Page size in mm for the chosen size and orientation. A custom size is kept within sensible limits. */

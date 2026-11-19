@@ -37,6 +37,8 @@ export interface Landmark {
   icon?: Icon;
   /** user landmarks only: added automatically for a searched place (and still off), so it can be replaced by the next search */
   fromSearch?: boolean;
+  /** user landmarks only: a short note for the memory route's key ("where we met, 2009") */
+  note?: string;
 }
 
 /** A lake or river, for writing its name; lakes are closed rings, [lat, lon] pairs. */

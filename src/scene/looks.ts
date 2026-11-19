@@ -27,6 +27,10 @@ export interface Look {
   north: false | NorthStyle;
   /** pen for lake and river names, when not the ink */
   waterLabel?: string;
+  /** how unsteady the hand is, 0 (a machine line) to 1; default 0 */
+  hand?: number;
+  /** draw the kilometre grid, numbered in the margin */
+  grid?: boolean;
 }
 
 const pen = (id: string, name: string, color: string, kind: string, tipMm: number): Pen => withKind({ id, name, color, tipMm }, kind, tipMm);
@@ -101,6 +105,26 @@ export const LOOKS: Look[] = [
     font: 'sans', trackingEm: 0.4, title: { style: 'fill' }, border: false, north: false,
   },
   {
+    id: 'military', name: 'Military', blurb: 'A field map: kilometre grid numbered in the margin, black buildings, red roads. Best at 1:25,000 or 1:50,000.',
+    paper: '#f6f4ec',
+    pens: [
+      pen('ink', 'Black', '#161616', 'technical', 0.25), pen('road', 'Red-brown', '#b03a2e', 'technical', 0.3),
+      pen('water', 'Blue', '#1f5fa8', 'technical', 0.25), pen('wood', 'Green', '#3f7d3a', 'technical', 0.25),
+    ],
+    ink: 'ink',
+    layers: {
+      buildings: { pen: 'ink', weightMm: 0.25, fill: 'solid' },
+      major: { pen: 'road', weightMm: 0.78 },
+      secondary: { pen: 'road', weightMm: 0.54 },
+      minor: { pen: 'ink', weightMm: 0.25 },
+      rail: { enabled: true, pen: 'ink', weightMm: 0.54, style: 'solid' },
+      water: { pen: 'water', weightMm: 0.25, fill: 'light' },
+      parks: { pen: 'wood', weightMm: 0.25, fill: 'medium', style: 'solid' },
+    },
+    font: 'sans', trackingEm: 0.06, title: { style: 'fill' },
+    border: { style: 'single', weightMm: 0.5 }, north: false, waterLabel: 'water', grid: true,
+  },
+  {
     id: 'kraft', name: 'Kraft', blurb: 'Black fineliner and white gel on brown kraft paper, like a hand-drawn shop map.',
     paper: '#b08968',
     pens: [pen('ink', 'Black fineliner', '#1a1410', 'fineliner', 0.4), pen('chalk', 'White gel', '#f7f3e8', 'gel', 0.5)],
@@ -114,7 +138,7 @@ export const LOOKS: Look[] = [
       major: { pen: 'ink', weightMm: 0.72 },
     },
     font: 'serif', trackingEm: 0.15, title: { style: 'outlineFill', fillPen: 'chalk', fillDensity: 'solid' },
-    border: { style: 'double', weightMm: 0.4 }, north: 'circle', waterLabel: 'chalk',
+    border: { style: 'double', weightMm: 0.4 }, north: 'circle', waterLabel: 'chalk', hand: 0.5,
   },
 ];
 
@@ -142,12 +166,15 @@ export function applyLook(p: Project, look: Look): void {
   p.text.location.pen = look.ink;
   p.text.info.pen = look.ink;
   p.watermarkPen = look.ink;
+  p.route.pen = look.ink;
 
   const border = defaultBorder(look.ink);
   p.border = look.border ? { ...border, enabled: true, style: look.border.style, weightMm: look.border.weightMm } : border;
   p.north = { ...p.north, enabled: !!look.north, style: look.north || p.north.style, pen: look.ink };
 
   p.features.pens = { default: look.ink, overrides: look.waterLabel ? { waterLabel: look.waterLabel } : {} };
+  p.hand = { ...p.hand, amount: look.hand ?? 0 };
+  p.grid = { ...p.grid, enabled: !!look.grid, pen: look.ink };
 
   // a coaster keeps its own limits (no title, no buildings, lighter lines) whatever the look
   if (sizeShape(p)) coasterPreset(p);

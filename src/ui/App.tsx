@@ -15,6 +15,8 @@ import { PlotPlayer } from './PlotPlayer';
 import type { Scene } from '../scene/types';
 import { DEFAULT_SPEED, formatDuration, formatLength, loadSpeed, planPlot, storeSpeed, type PlotterSpeed } from '../export/plan';
 import { LooksGroup } from './LooksGroup';
+import { RouteGroup } from './RouteGroup';
+import { GridGroup } from './GridGroup';
 import type { Part } from '../scene/types';
 import { isDarkPaper } from '../scene/pens';
 import { passCount, passWidth, summarizePasses } from '../export/offset';
@@ -25,7 +27,7 @@ import { FEATURE_PEN_LABELS, inkWidth, penFor } from '../scene/pens';
 import type { FeaturePenKey } from '../features/types';
 import { inverseMercator, mercator } from '../geo/project';
 import { DEFAULT_WATERLINES, isAreaLayer, LANDMARKS_MAX_KM, LAYER_KEYS, LAYER_LABELS, LAYER_MAX_KM, type LayerKey, type WaterlineStyle } from '../city/types';
-import { coasterPreset, sizeShape, REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
+import { coasterPreset, MAP_SCALES, sizeShape, REGION_MAX_KM, REGION_MIN_KM, CUSTOM_SIZE_ID, CUSTOM_SIZE_MAX_MM, CUSTOM_SIZE_MIN_MM, PRINT_SIZES, type SizeGroup, type Project, type Corner, type NorthStyle, type Align, type FontKey, type Placement } from '../scene/project';
 
 const PlaceRow = ({ value, onChange }: { value: Placement; onChange: (v: Placement) => void }) => (
   <Row label="Position">
@@ -77,6 +79,9 @@ const PARTS: Record<Part, { group: string; label: string; focus?: string }> = {
   rail: { group: 'layers', label: 'Railways', focus: '[data-edit="layer-rail"]' },
   north: { group: 'north', label: 'North arrow' },
   landmarks: { group: 'landmarks', label: 'Landmarks' },
+  route: { group: 'route', label: 'Memory route' },
+  routeKey: { group: 'route', label: 'Route key' },
+  grid: { group: 'grid', label: 'Grid' },
 };
 
 /** The part of the map under the pointer, if any: a landmark's own label first, then the part an element draws. */
@@ -426,9 +431,22 @@ function Editor({ narrow }: { narrow: boolean }) {
         {region && view && (<>
         <Group id="region" title="Region">
           <div className="hint">Drag the map to move it. Scroll over it to zoom. The area follows the page shape, so a taller page shows more north to south.</div>
+          <Row label="Scale">
+            <select value={region.scale ?? ''} data-edit="scale" onChange={(e) => {
+              const s = +e.target.value;
+              // a fixed scale: the width follows the map frame (the scene works it out; this keeps the slider in step)
+              setRegion(s ? { scale: s, widthKm: +((view.frame.w * s) / 1e6).toFixed(3) } : { scale: undefined, widthKm: view.widthKm });
+            }}>
+              <option value="">Free · 1:{view.scale.toLocaleString('en-US')}</option>
+              {MAP_SCALES.map((s) => <option key={s} value={s}>1:{s.toLocaleString('en-US')}</option>)}
+            </select>
+          </Row>
+          {region.scale
+            ? <div className="hint">Fixed at 1:{region.scale.toLocaleString('en-US')}: 1 cm on paper is {fmtKm(region.scale / 1e5)} on the ground, whatever the page size. Zooming the map or moving the width lets go of it.</div>
+            : null}
           <Row label="Width">
-            <input type="range" min={Math.log(REGION_MIN_KM)} max={Math.log(REGION_MAX_KM)} step={0.01} value={Math.log(region.widthKm)} onChange={(e) => setRegion({ widthKm: +Math.exp(+e.target.value).toFixed(3) })} />
-            <span>{fmtKm(region.widthKm)}</span>
+            <input type="range" min={Math.log(REGION_MIN_KM)} max={Math.log(REGION_MAX_KM)} step={0.01} value={Math.log(view.widthKm)} onChange={(e) => setRegion({ widthKm: +Math.exp(+e.target.value).toFixed(3) })} />
+            <span>{fmtKm(view.widthKm)}</span>
           </Row>
           <Row label="Center">
             <input type="number" step={0.001} title="Latitude" value={+region.lat.toFixed(5)} onChange={(e) => setRegion({ lat: +e.target.value || 0 })} />
@@ -673,6 +691,10 @@ function Editor({ narrow }: { narrow: boolean }) {
           );
         })}
         </Group>
+
+        <RouteGroup />
+
+        {region && view && <GridGroup scale={view.scale} lat={region.lat} lon={region.lon} />}
 
         <Group id="north" title="North arrow" toggle={{ on: p.north.enabled, onChange: (on) => set((x) => { x.north.enabled = on; }) }}>
         {p.north.enabled && (<>

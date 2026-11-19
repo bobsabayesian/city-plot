@@ -1,5 +1,5 @@
 import type { PathPrim, Scene, TextPrim } from '../scene/types';
-import { offsetPath, passOffsets } from './offset';
+import { dashPath, DOT_MM, flattenPath, offsetPath, passOffsets, passPitch } from './offset';
 import { HATCH_FACTOR, hatchPath } from './hatch';
 import { inkWidth, penFor, type Pen } from '../scene/pens';
 import { textToStrokes } from './strokefont';
@@ -144,8 +144,22 @@ export function prepareScene(scene: Scene, mode: ExportMode, fonts?: FontSet, op
       strokes.push({ kind: 'path', d: p.d, color: p.color, pen: p.pen, mode: 'stroke', widthMm: pen, round: true });
       return strokes;
     }
+    // A dotted line heavier than the pen: each dot is a small disc, drawn as a tap in the middle and rings out to its edge
+    // (side-by-side passes of a pen tap would make a short dash across the line, not a dot).
+    if (p.mode === 'stroke' && p.dash && p.dash[0] === 0 && (p.widthMm ?? 0.5) > pen * 1.2) {
+      const centers = flattenPath(dashPath(p.d, p.dash)).map((s) => s.pts[0]!);
+      const reach = ((p.widthMm ?? 0.5) - pen) / 2;
+      const rings: number[] = [];
+      for (let r = reach; r > pen * 0.4; r -= passPitch(pen)) rings.push(r);
+      const ff = (n: number) => +n.toFixed(3);
+      const d = centers.map(([x, y]) => `M${ff(x)} ${ff(y)}L${ff(x + DOT_MM)} ${ff(y)}`
+        + rings.map((r) => `M${ff(x - r)} ${ff(y)}a${ff(r)} ${ff(r)} 0 1 0 ${ff(2 * r)} 0a${ff(r)} ${ff(r)} 0 1 0 ${ff(-2 * r)} 0Z`).join('')).join('');
+      return d ? [{ ...p, d, dash: undefined, opacity: undefined, widthMm: pen, minPasses: undefined }] : [];
+    }
     // Plotters cannot fill or fade: draw the outline instead, at full strength, with the one pen.
-    const stroke: PathPrim = p.mode === 'fill' ? { ...p, mode: 'stroke', widthMm: pen, opacity: undefined } : { ...p, opacity: undefined };
+    // Plotting software ignores dash patterns, so a dashed or dotted line is cut into its dashes (and dots) here.
+    const stroke: PathPrim = p.mode === 'fill' ? { ...p, mode: 'stroke', widthMm: pen, opacity: undefined }
+      : p.dash ? { ...p, d: dashPath(p.d, p.dash), dash: undefined, opacity: undefined } : { ...p, opacity: undefined };
     const offsets = passOffsets(stroke.widthMm ?? 0.5, pen, stroke.minPasses);
     // A heavy line is the same path repeated, shifted sideways, with the thin pen.
     return offsets.map((o) => ({ ...stroke, d: o === 0 ? stroke.d : offsetPath(stroke.d, o), widthMm: pen, minPasses: undefined }));

@@ -117,7 +117,10 @@ export const useStore = create<Store>((setState, get) => ({
 
   setRegion: (r) => get().set((p) => {
     if (!p.region) return;
+    // setting the width by hand (zooming, dragging the slider) lets go of a fixed scale
+    if (r.widthKm !== undefined && !('scale' in r)) delete p.region.scale;
     Object.assign(p.region, r);
+    if (p.region.scale === undefined) delete p.region.scale;
     p.region.widthKm = clampKm(p.region.widthKm);
     p.region.lat = Math.max(-80, Math.min(80, p.region.lat));
     if (p.region.rotationDeg !== undefined) p.region.rotationDeg = ((((p.region.rotationDeg + 180) % 360) + 360) % 360) - 180;

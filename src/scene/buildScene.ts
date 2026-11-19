@@ -1,5 +1,5 @@
 import { fitBBox, inverseMercator, mercator, rotateFit, type BBox, type Fit } from '../geo/project';
-import { circlePolygon, roundRectPolygon, type Rect, type XY } from '../geo/clip';
+import { circlePolygon, clipPolyline, clipPolylineConvex, roundRectPolygon, type Rect, type XY } from '../geo/clip';
 import { formatCoords, formatKm, formatMiles } from '../geo/format';
 import { layerPrims, waterLines, type MapClip } from '../city/draw';
 import { LAYER_KEYS, LAYER_MAX_KM, type LayerData, type LayerKey } from '../city/types';
@@ -8,10 +8,15 @@ import { boxAt } from '../features/select';
 import type { LandmarkEntry, LandmarkPlacement } from '../features/select';
 import { penKeyOf, type Landmark } from '../features/types';
 import { northBox, northPrims } from './north';
+import { handPrim } from './hand';
+import { autoSpacingKm, gridGeometry, gridLines } from './grid';
+import { legArrow, routeDash, routeHalos, routeLegs, routeStops, stopLabel, trimLeg } from '../features/route';
+import { cutOutHalos } from '../features/halo';
+import { effectiveWidth, flattenPath } from '../export/offset';
 import { borderExtent, borderPrims, layoutBorder } from './border';
-import { featurePenId, penFor } from './pens';
+import { featurePenId, inkWidth, penFor } from './pens';
 import type { Part, Prim, Scene } from './types';
-import { clampMargins, posterMm, sizeShape, type InfoItem, type Placement, type Project, type Region } from './project';
+import { clampMargins, posterMm, REGION_MAX_KM, REGION_MIN_KM, sizeShape, type InfoItem, type Placement, type Project, type Region } from './project';
 
 const PT = 25.4 / 72;
 /** Poster title when nothing has been searched for yet. */
@@ -110,6 +115,26 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
 
   // ---- text blocks (height + draw), stacked from the top and bottom margins
   const blocks: Record<Placement, Block[]> = { top: [], bottom: [] };
+
+  // the memory route's key: its stops in order, with their notes, right under the map
+  const stops = p.route.enabled ? routeStops(p.route, p.custom) : [];
+  if (stops.length && p.route.key) {
+    const size = p.route.keySizePt * PT;
+    const two = stops.length > 4;
+    const rows = two ? Math.ceil(stops.length / 2) : stops.length;
+    const lineH = size * 1.55;
+    blocks.bottom.push({
+      part: 'routeKey', height: (rows - 1) * lineH + size * 0.75, gapAfter: size * 1.6,
+      draw: (y) => stops.map((s, i) => {
+        const col = two ? Math.floor(i / rows) : 0;
+        const row = two ? i % rows : i;
+        const line = `${p.route.numbers ? `${i + 1}. ` : ''}${s.name}${s.note?.trim() ? ` — ${s.note.trim()}` : ''}`;
+        const extra = two ? { anchor: 'start' as const } : {};
+        const x = two ? contentL + col * (innerW / 2) : tx;
+        return text(p.route.pen, line, y + row * lineH + size * 0.72, size, { trackingMm: size * t.trackingEm * 0.4, ...extra }, x);
+      }),
+    });
+  }
 
   const title = (t.title.value ?? auto.title).trim();
   if (t.title.visible && title) {
@@ -212,7 +237,9 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
   let open: LandmarkPlacement['open'] | undefined;
   if (p.region) {
     const frame: Rect = { x: contentL, y: topCursor, w: innerW, h: Math.max(bottomCursor - topCursor, 1) };
-    const flat = fitBBox(regionBBox(p.region, frame.h / frame.w), frame);
+    // a fixed scale sets the ground width from the frame: 1 mm on paper is `scale` mm on the ground
+    const region = p.region.scale ? { ...p.region, widthKm: Math.min(REGION_MAX_KM, Math.max(REGION_MIN_KM, (frame.w * p.region.scale) / 1e6)) } : p.region;
+    const flat = fitBBox(regionBBox(region, frame.h / frame.w), frame);
     const fit = rotateFit(flat, frame, p.region.rotationDeg ?? 0);
     // the ground the frame shows; turned, that is a tilted rectangle, so data is needed for its bounding box
     const corners = [[frame.x, frame.y], [frame.x + frame.w, frame.y], [frame.x, frame.y + frame.h], [frame.x + frame.w, frame.y + frame.h]].map(([x, y]) => fit.fromMm(x!, y!));
@@ -260,27 +287,36 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     }
     const inClip = clip ? (x: number, y: number) => pointInConvex(x, y, clip!.poly) : undefined;
 
+    // The memory route: its legs (stopping short of each marker) and the full line, which labels keep off.
+    const markerR = Math.min(W, H) * 0.0045;
+    const stopPts = stops.map((s) => fit.toMm(s.lat, s.lon));
+    const legs = stopPts.length > 1 ? routeLegs(stopPts, p.route.curved) : [];
+    const routeLine = legs.flatMap((l, i) => (i ? l.slice(1) : l));
+    const shown = legs.map((l) => trimLeg(l, markerR * 1.4 + 1.2)).filter((l) => l.length > 1);
+    const stopNo = new Map(stops.map((s, i) => [s.id, i + 1]));
+
     // Landmark labels are placed first: they keep clear of the north arrow, and the map lines are cut away around them.
     let placed: ReturnType<typeof landmarkPrims> | undefined;
     if (p.features.enabled) {
       const sizeMm = p.features.sizePt * PT;
       const arrow = p.north.enabled ? northBox(northFrame, p.north.corner, p.north.sizeMm) : undefined;
       placed = landmarkPrims({
-        landmarks: [...p.custom, ...(data?.landmarks ?? [])],
+        // stops on a numbered route are labelled with their number ("1. Home")
+        landmarks: [...p.custom.map((c) => (stopNo.has(c.id) ? { ...c, name: stopLabel(stopNo.get(c.id)!, c.name, p.route.numbers) } : c)), ...(data?.landmarks ?? [])],
         water: p.features.waterLabels && p.layers.water.enabled && widest <= LAYER_MAX_KM.water ? waterLines(data?.layers.water) : [],
         waterNames: p.features.waterLabels && p.layers.water.enabled && widest <= LAYER_MAX_KM.water ? data?.layers.water?.waterNames : undefined,
-        fit, frame, route: [],
+        fit, frame, route: routeLine,
         obstacles: arrow ? [boxAt(arrow.x, arrow.y, arrow.x + p.north.sizeMm, arrow.y + p.north.sizeMm)] : [],
         labelBounds: withinBorder({ x: frame.x - mg.left * 0.5, y: frame.y - mg.top * 0.5, w: frame.w + (mg.left + mg.right) * 0.5, h: frame.h + mg.top * 0.5 }),
         settings: p.features, sizeMm, inside: inClip,
-        markerR: Math.min(W, H) * 0.0045,
+        markerR,
         penFor: (kind) => penFor(p.pens, featurePenId(p.features, penKeyOf(kind))),
         fontFamily, fontKey: t.font, trackingMm: sizeMm * 0.05,
       });
     }
 
-    // the map lines are also cut away under the north arrow, so it sits on clear paper like a label does
-    const halos = [...(placed?.halos ?? [])];
+    // the map lines are also cut away under the north arrow, so it sits on clear paper like a label does, and along the route
+    const halos = [...(placed?.halos ?? []), ...routeHalos(shown, p.route.clearMm)];
     if (p.north.enabled) {
       const s = p.north.sizeMm;
       const at = northBox(northFrame, p.north.corner, s);
@@ -288,13 +324,53 @@ function compose(p: Project, layoutOnly = false, data?: CityData, moving = false
     }
 
     // the map layers, bottom first; a layer is skipped when the view is wider than it is made for
+    const firstMapPrim = prims.length;
+    const gridLabels: Prim[] = [];
     for (const key of LAYER_KEYS) {
       const style = p.layers[key];
       const layer = data?.layers[key];
       if (!style.enabled || !layer || widest > LAYER_MAX_KM[key]) continue;
       prims.push(...layerPrims(key, style, penFor(p.pens, style.pen), layer, fit, frame, clip, halos, moving));
     }
+    // the kilometre grid over the map layers, cut around the labels; its numbers go in the margin, outside the frame
+    if (p.grid.enabled) {
+      const pen = penFor(p.pens, p.grid.pen);
+      const spacing = p.grid.spacingKm > 0 ? p.grid.spacingKm : autoSpacingKm(view.scale);
+      const g = gridLines(fit, frame, spacing);
+      const sizeMm = p.grid.labelSizePt * PT;
+      const geo = gridGeometry(g.lines, frame, clip, 1.2, sizeMm);
+      const d = cutOutHalos(geo.pieces, halos).map((l) => l.map(([x, y], i) => `${i ? 'L' : 'M'}${+x.toFixed(2)} ${+y.toFixed(2)}`).join('')).join('');
+      if (d) prims.push({ kind: 'path', part: 'grid', d, color: pen.color, pen: pen.id, mode: 'stroke', widthMm: inkWidth(pen), round: true });
+      if (p.grid.labels) gridLabels.push(...geo.labels.map((lb): Prim => ({
+        kind: 'text', part: 'grid', text: lb.text, x: lb.x, y: lb.y, anchor: lb.anchor, sizeMm, trackingMm: 0,
+        fontFamily, fontKey: t.font, color: pen.color, pen: pen.id,
+      })));
+    }
+    // the route over the map: dotted legs and an arrow on each, cut to the map and kept off the labels
+    if (shown.length) {
+      const pen = penFor(p.pens, p.route.pen);
+      const w = effectiveWidth(p.route.weightMm, inkWidth(pen));
+      const cut = (lines: XY[][]) => cutOutHalos(lines.flatMap((l) => (clip ? clipPolylineConvex(l, clip.poly, clip.safe) : clipPolyline(l, frame))), placed?.halos ?? []);
+      const d = (lines: XY[][]) => lines.map((l) => l.map(([x, y], i) => `${i ? 'L' : 'M'}${+x.toFixed(2)} ${+y.toFixed(2)}`).join('')).join('');
+      const line = d(cut(shown));
+      if (line) prims.push({ kind: 'path', part: 'route', d: line, color: pen.color, pen: pen.id, mode: 'stroke', widthMm: w, round: true, ...(routeDash(p.route.style, w) ? { dash: routeDash(p.route.style, w) } : {}) });
+      if (p.route.arrows) {
+        const arrows = shown.map((l) => legArrow(l, Math.max(3, w * 4.5))).filter(Boolean).flatMap((a) => flattenPath(a).map((s) => s.pts as XY[]));
+        const ad = d(cut(arrows));
+        if (ad) prims.push({ kind: 'path', part: 'route', d: ad, color: pen.color, pen: pen.id, mode: 'stroke', widthMm: w, round: true });
+      }
+    }
+    // drawn by hand: the map lines tremble and drift, and are cut to the map again; the border is redrawn by hand too
+    if (p.hand.amount > 0) {
+      for (let i = 0; i < prims.length; i++) {
+        const x = prims[i]!;
+        if (x.kind !== 'path') continue;
+        if (i >= firstMapPrim) prims[i] = handPrim(x, p.hand, frame, clip);
+        else if (x.part === 'border') prims[i] = handPrim(x, p.hand);
+      }
+    }
 
+    prims.push(...gridLabels);
     if (p.north.enabled) {
       prims.push(...northPrims(northFrame, { ...p.north, color: colorOf(p.north.pen), fontFamily, fontKey: t.font, rotateDeg: p.region?.rotationDeg }).map((x) => ({ ...x, part: 'north' as const })));
     }

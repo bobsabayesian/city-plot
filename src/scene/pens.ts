@@ -136,6 +136,8 @@ export function mapPenRefs(p: Project, fn: (id: string) => string): void {
   p.text.info.pen = fn(p.text.info.pen);
   p.watermarkPen = fn(p.watermarkPen);
   p.border.pen = fn(p.border.pen);
+  p.route.pen = fn(p.route.pen);
+  p.grid.pen = fn(p.grid.pen);
   p.features.pens.default = fn(p.features.pens.default);
   for (const k of Object.keys(p.features.pens.overrides) as FeaturePenKey[]) {
     const id = p.features.pens.overrides[k];
@@ -207,6 +209,8 @@ export function penSlots(p: Project): PenSlot[] {
       });
     }
   }
+  if (p.route.enabled) add('route', 'Memory route', 'route', (q) => q.route.pen, (q, id) => { q.route.pen = id; });
+  if (p.grid.enabled) add('grid', 'Grid', 'grid', (q) => q.grid.pen, (q, id) => { q.grid.pen = id; });
   if (p.north.enabled) add('north', 'North arrow', 'north', (q) => q.north.pen, (q, id) => { q.north.pen = id; });
   if (p.text.title.visible) {
     add('title', p.text.title.style === 'fill' ? 'Title' : 'Title outline', 'type', (q) => q.text.title.pen, (q, id) => { q.text.title.pen = id; });

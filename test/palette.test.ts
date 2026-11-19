@@ -100,8 +100,8 @@ describe('removing a pen', () => {
     const p = defaultProject();
     const seen: string[] = [];
     mapPenRefs(p, (id) => { seen.push(id); return 'x'; });
-    // 8 layers, north, title, title fill, location, info, watermark, border, landmarks default + 1 override
-    expect(seen.length).toBe(LAYER_KEYS.length + 8 + 1);
+    // 8 layers, north, title, title fill, location, info, watermark, border, memory route, grid, landmarks default + 1 override
+    expect(seen.length).toBe(LAYER_KEYS.length + 10 + 1);
     for (const k of LAYER_KEYS) expect(p.layers[k].pen).toBe('x');
     expect(p.north.pen).toBe('x');
     expect(p.text.title.pen).toBe('x');
@@ -110,6 +110,8 @@ describe('removing a pen', () => {
     expect(p.text.info.pen).toBe('x');
     expect(p.watermarkPen).toBe('x');
     expect(p.border.pen).toBe('x');
+    expect(p.route.pen).toBe('x');
+    expect(p.grid.pen).toBe('x');
     expect(p.features.pens).toEqual({ default: 'x', overrides: { waterLabel: 'x' } });
   });
 });

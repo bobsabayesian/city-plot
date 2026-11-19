@@ -53,6 +53,19 @@ export function LooksGroup() {
           </button>
         ))}
       </div>
+      <div className="row hand">
+        <label htmlFor="hand">Hand</label>
+        <span className="unit">Steady</span>
+        <input id="hand" type="range" min={0} max={1} step={0.05} value={current.hand.amount} data-edit="hand"
+          onChange={(e) => set((x) => { x.hand = { ...x.hand, amount: +e.target.value }; })} />
+        <span className="unit">Sketchy</span>
+      </div>
+      {current.hand.amount > 0 && (
+        <div className="row">
+          <span className="hint" style={{ margin: 0, flex: 1 }}>Map lines wobble as if inked by hand; streets that meet still meet.</span>
+          <button type="button" title="The same map, drawn by a slightly different hand" onClick={() => set((x) => { x.hand = { ...x.hand, seed: (x.hand.seed % 100000) + 1 + Math.floor(Math.random() * 1000) }; })}>↻ Another take</button>
+        </div>
+      )}
       {undo && (
         <div className="row">
           <span className="hint" style={{ margin: 0, flex: 1 }}>{undo.name} applied.</span>

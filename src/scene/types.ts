@@ -1,6 +1,6 @@
 /** Renderer-agnostic drawing description. Preview, SVG, PDF and PNG all consume this. */
 /** Which part of the map a primitive draws; the editor preview uses it to open that part's settings when clicked. */
-export type Part = 'border' | 'title' | 'location' | 'info' | 'watermark' | 'water' | 'parks' | 'buildings' | 'paths' | 'minor' | 'secondary' | 'major' | 'rail' | 'north' | 'landmarks';
+export type Part = 'border' | 'title' | 'location' | 'info' | 'watermark' | 'water' | 'parks' | 'buildings' | 'paths' | 'minor' | 'secondary' | 'major' | 'rail' | 'north' | 'landmarks' | 'route' | 'routeKey' | 'grid';
 
 /** How densely a fill is hatched for a plotter, relative to the pen tip. */
 export type HatchDensity = 'solid' | 'medium' | 'light';

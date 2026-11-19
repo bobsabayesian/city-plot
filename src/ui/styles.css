@@ -178,3 +178,10 @@ button.link:hover:not(:disabled) { background: none; }
 .player input[type=range] { flex: 1 1 160px; min-width: 120px; }
 .player .clock { font-variant-numeric: tabular-nums; font-size: 12px; white-space: nowrap; }
 .player-status { margin: 0; white-space: nowrap; min-width: 10em; }
+.row.hand input[type=range] { flex: 1; }
+
+/* memory route stops */
+.stop .row input[type=text] { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.stop-no { flex: 0 0 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-variant-numeric: tabular-nums; }
+.stop-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stop button { padding: 2px 8px; }
